@@ -1,0 +1,22 @@
+Cond="version_compare(parse_ini_file('/etc/unraid-version')['version'],'6.11.9','>')"
+Menu="Dashboard:0"
+---
+<?php
+/*
+ * zfs-backup – Dashboard-Kachel (Vorbild: Tailscale-Plugin).
+ *
+ * Registriert die Kachel über $mytiles[$plugin][<spalte>]; Unraid platziert sie
+ * via customTiles() als Karte in der Spalte. Die Logik liegt im Include; das
+ * try/catch garantiert, dass ein Fehler hier NIE das Dashboard zerschießt
+ * (zeigt dann eine Fallback-Kachel statt eines Absturzes).
+ */
+try {
+    $docroot = $docroot ?? $_SERVER['DOCUMENT_ROOT'] ?: '/usr/local/emhttp';
+    require_once "{$docroot}/plugins/zfs-backup/include/dashboard-tile.php";
+
+    $mytiles['zfs-backup']['column2'] = zfs_backup_dashboard_tile();
+} catch (Throwable $e) {
+    $mytiles['zfs-backup']['column2'] =
+        '<tbody title="ZFS Backup"><tr><td>Fehler beim Laden der ZFS-Backup-Kachel.</td></tr></tbody>';
+}
+?>

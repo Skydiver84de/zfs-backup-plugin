@@ -1,0 +1,13 @@
+# Lokale Laufzeit- und Konfigurationsdateien (nicht versioniert)
+zfs-backup.conf
+zfs-backup.conf.bak-*
+zfs-backup.sh.bak-*
+logs/
+state/
+lock/
+
+# Build-Zwischenartefakt am plugin/-Wurzelpfad (die versionierte Kopie liegt
+# unter plugin/packages/). plugin/packages/*.txz und plugin/zfs-backup.plg werden
+# bewusst committet – sie sind der öffentliche Installations-/Update-Einstieg
+# (Unraid lädt .plg + .txz per raw-URL).
+plugin/*.txz

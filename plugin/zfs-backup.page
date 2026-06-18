@@ -1,0 +1,2225 @@
+Menu="Utilities"
+Title="ZFS Backup"
+Icon="zfs-backup.png"
+---
+<?php
+/*
+ * zfs-backup – Unraid-Plugin-GUI (Tabs: Status, Konfiguration, Ziele,
+ * Snapshots, Wartung, Logs, Zeitplan).
+ *
+ * Formularfelder werden über Unraids Markdown-Konverter gerendert (native
+ * Inline-Hilfe), siehe zb_md().
+ *
+ * Diese Seite enthält KEINE ZFS-/Backup-Logik. Sie ruft ausschließlich die
+ * headless-Schnittstelle des Skripts über den Wrapper auf und stellt das JSON
+ * dar bzw. reicht Eingaben über die bestehende Validierung weiter (die GUI ist
+ * nur eine Sicht auf den Kern).
+ */
+
+$ZB_CLI = '/usr/local/sbin/zfs-backup';
+
+/* Ruft den Wrapper mit den übergebenen Argumenten und dekodiert die JSON-Ausgabe.
+ * Gibt [data|null, rc] zurück. */
+function zb_json(string $args): array {
+    global $ZB_CLI;
+    $out = [];
+    $rc  = 0;
+    exec(escapeshellarg($ZB_CLI) . ' ' . $args . ' 2>/dev/null', $out, $rc);
+    $data = json_decode(implode("\n", $out), true);
+    return [$data, $rc];
+}
+
+/* HTML-sichere Ausgabe, mit Fallback. */
+function zb_h($v, string $fallback = '–'): string {
+    if ($v === null || $v === '' || $v === '-') return $fallback;
+    return htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8');
+}
+
+/* Bytes menschenlesbar (binär, wie zfs). */
+function zb_bytes($n): string {
+    $n = (float)$n;
+    $u = ['B','KiB','MiB','GiB','TiB','PiB'];
+    $i = 0;
+    while ($n >= 1024 && $i < count($u) - 1) { $n /= 1024; $i++; }
+    $d = ($i === 0) ? 0 : ($n < 10 ? 2 : ($n < 100 ? 1 : 0));
+    return number_format($n, $d) . ' ' . $u[$i];
+}
+
+/* Attribut-sichere Ausgabe (kein Fallback). */
+function zb_a($v): string {
+    return htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8');
+}
+
+/* --- Eingabefelder ------------------------------------------------------
+ * Liefern reines Markup als EINZEILIGE HTML-Zeichenkette (wichtig, da sie als
+ * dd-Inhalt ins native Unraid-„markdown" eingesetzt werden). data-orig trägt den
+ * Ausgangswert für den Änderungsvergleich beim Speichern. KEINE Logik – nur
+ * Darstellung der vom Kern gelieferten Werte.
+ *
+ * $attr unterscheidet die beiden Speicherwege: 'data-name' (Konfig-Tab ->
+ * save.php) bzw. 'data-field' (Ziel-Editor -> targets.php). */
+function zb_input(string $attr, string $name, string $type, string $val, string $ph = ''): string {
+    $a = $attr . '="' . zb_a($name) . '"';
+    if ($type === 'bool') {
+        $on = ($val === 'yes');
+        return '<select ' . $a . ' data-type="bool" data-orig="' . ($on ? 'yes' : 'no') . '">'
+             . '<option value="yes"' . ($on ? ' selected' : '') . '>ja</option>'
+             . '<option value="no"'  . ($on ? '' : ' selected') . '>nein</option></select>';
+    }
+    if ($type === 'number') {
+        $v = (string)(int)$val;
+        return '<input type="number" min="0" step="1" ' . $a . ' data-type="number" data-orig="' . zb_a($v) . '" value="' . zb_a($v) . '">';
+    }
+    return '<input type="text" ' . $a . ' data-type="string" data-orig="' . zb_a($val) . '" value="' . zb_a($val) . '"'
+         . ($ph !== '' ? ' placeholder="' . zb_a($ph) . '"' : '') . '>';
+}
+
+/* Dünne Wrapper für den Ziel-Editor (data-field). */
+function zb_ed_text(string $field, $val, string $ph = ''): string {
+    return zb_input('data-field', $field, 'string', (string)($val ?? ''), $ph);
+}
+function zb_ed_num(string $field, $val): string {
+    return zb_input('data-field', $field, 'number', (string)(int)($val ?? 0));
+}
+function zb_ed_bool(string $field, $on): string {
+    return zb_input('data-field', $field, 'bool', $on ? 'yes' : 'no');
+}
+
+/* Eingabefeld für eine Konfig-Option (data-name). array/secret sind Konfig-
+ * spezifisch, der Rest läuft über zb_input(). */
+function zb_cfg_input(string $name, string $type, $cur, bool $isSecret): string {
+    if ($type === 'bool') {
+        return zb_input('data-name', $name, 'bool', ($cur === 'yes' || $cur === true) ? 'yes' : 'no');
+    }
+    /* enum:opt1,opt2,... -> Dropdown mit fester Auswahl (wie bool, data-type=string). */
+    if (strncmp($type, 'enum:', 5) === 0) {
+        $opts = explode(',', substr($type, 5));
+        $val  = (string)($cur ?? '');
+        $h = '<select data-name="' . zb_a($name) . '" data-type="string" data-orig="' . zb_a($val) . '">';
+        foreach ($opts as $o) {
+            $sel = ($o === $val) ? ' selected' : '';
+            $h .= '<option value="' . zb_a($o) . '"' . $sel . '>' . zb_h($o) . '</option>';
+        }
+        return $h . '</select>';
+    }
+    if ($type === 'number') {
+        return zb_input('data-name', $name, 'number', (string)(int)($cur ?? 0));
+    }
+    if ($type === 'array') {
+        $items  = is_array($cur) ? $cur : [];
+        $joined = implode(' ', $items);
+        $chips  = '';
+        foreach ($items as $it) {
+            $chips .= '<span class="zb-chip"><span class="zb-chip-v">' . zb_h($it)
+                    . '</span><i class="fa fa-times zb-chip-x" role="button" aria-label="Entfernen"></i></span>';
+        }
+        $empty = '<span class="zb-list-empty"' . ($items ? ' style="display:none"' : '') . '>– keine Einträge –</span>';
+        return '<span class="zb-list">'
+             . '<span class="zb-chips">' . $empty . $chips . '</span>'
+             . '<span class="zb-list-add"><input type="text" class="zb-list-input" placeholder="Dataset hinzufügen, z. B. tank/data">'
+             . '<button type="button" class="zb-list-addbtn">Hinzufügen</button></span>'
+             . '<input type="hidden" data-name="' . zb_a($name) . '" data-type="array" data-orig="' . zb_a($joined) . '" value="' . zb_a($joined) . '">'
+             . '</span>';
+    }
+    if ($isSecret) {
+        $set = ($cur === '***');
+        return '<input type="password" autocomplete="new-password" data-name="' . zb_a($name) . '" data-type="secret" data-orig=""'
+             . ' value="" placeholder="' . ($set ? 'gesetzt – leer lassen, um zu behalten' : 'nicht gesetzt') . '">';
+    }
+    return zb_input('data-name', $name, 'string', (string)($cur ?? ''));
+}
+
+/* Rendert einen Markdown-String über Unraids eigenen Konverter zu HTML (native
+ * Inline-Hilfe inklusive). Unraids markdown="1"-Auto-Processing läuft VOR PHP und
+ * greift bei per PHP erzeugtem Markup nicht – daher der direkte Aufruf. */
+function zb_md(string $md): string {
+    if (!function_exists('Markdown')) {
+        $f = '/usr/local/emhttp/plugins/dynamix/include/Markdown.php';
+        if (is_file($f)) require_once $f;
+    }
+    return function_exists('Markdown') ? Markdown($md) : '<pre>' . zb_h($md) . '</pre>';
+}
+
+/* Markdown-Schnipsel für eine beschriftete Zeile (Label als Term, Eingabefeld als
+ * dd, Hinweis als Blockquote -> native Unraid-Inline-Hilfe). Eingabefeld muss eine
+ * EINZEILIGE HTML-Zeichenkette sein. */
+function zb_ed_md(string $label, string $hint, string $inputHtml): string {
+    $s = $label . ":\n: " . $inputHtml . ' <span class="fieldmsg"></span>' . "\n";
+    if ($hint !== '') {
+        $s .= "\n> " . preg_replace('/\s+/', ' ', $hint) . "\n";
+    }
+    return $s . "\n";
+}
+
+// EIN Aggregat-Aufruf statt fünf Einzelaufrufen (ein Interpreter-Start statt
+// fünf) – spürbar schnellerer Seitenaufbau. Liefert Status, Kapazität (cached),
+// Schema, Konfigwerte und Ziele in einem JSON-Objekt.
+list($gui, $rc) = zb_json('--gui-init --json');
+if (!is_array($gui)) { $gui = []; }
+$st      = $gui['status']   ?? null;
+$cap     = $gui['capacity'] ?? null;
+$schema  = $gui['schema']   ?? null;
+$values  = $gui['values']   ?? null;
+$targets = $gui['targets']  ?? null;
+
+/* CSRF-Token für den Speicher-Endpoint. In Unraid-Seiten stellt der PageBuilder
+ * das geparste var.ini als globales $var bereit – das ist die zuverlässige
+ * Quelle (eigenes Datei-Lesen scheitert hier u. U. an open_basedir). */
+global $var;
+$csrf = $var['csrf_token'] ?? '';
+?>
+
+<style>
+.zb-wrap { max-width: 920px; }
+.zb-head { display:flex; align-items:center; gap:14px; margin-bottom:14px; }
+.zb-head img { width:52px; height:52px; }
+.zb-head h2 { margin:0; font-size:20px; }
+.zb-head .zb-ver { color:#888; font-size:13px; }
+.zb-badge { display:inline-block; padding:2px 10px; border-radius:12px;
+            font-size:12px; font-weight:600; color:#fff; vertical-align:middle; }
+.zb-badge.run  { background:#1E88E5; }
+.zb-badge.idle { background:#777; }
+.zb-badge.ok   { background:#2E7D5B; }
+.zb-badge.err  { background:#C0392B; }
+.zb-stale { color:#E67E22; font-weight:600; font-size:13px; vertical-align:middle; }
+.zb-cap td { vertical-align:middle; }
+.zb-bar { position:relative; height:18px; min-width:120px; border-radius:9px;
+          background:rgba(128,128,128,.18); overflow:hidden; }
+.zb-bar-fill { position:absolute; top:0; left:0; bottom:0; border-radius:9px; }
+.zb-bar-fill.low  { background:#2E7D5B; }
+.zb-bar-fill.mid  { background:#E67E22; }
+.zb-bar-fill.high { background:#C0392B; }
+.zb-bar-lbl { position:absolute; inset:0; display:flex; align-items:center;
+              justify-content:center; font-size:11px; font-weight:600; }
+/* Aufklappbare Scopes (Quelle/Ziel) im Snapshots-Tab */
+.zb-scope { border:1px solid rgba(128,128,128,.22); border-radius:8px;
+            margin:0 0 12px; overflow:hidden; }
+.zb-scope-head { display:flex; align-items:center; gap:10px; cursor:pointer;
+            padding:10px 14px; background:rgba(128,128,128,.06); }
+.zb-scope-head:hover { background:rgba(128,128,128,.12); }
+.zb-scope.open > .zb-scope-head > .zb-caret { transform:rotate(90deg); }
+.zb-scope-kind { font-size:11px; text-transform:uppercase; letter-spacing:.04em;
+            color:#999; }
+.zb-scope-label { font-weight:600; }
+.zb-scope-sum { margin-left:auto; color:#999; font-size:12px;
+            font-variant-numeric:tabular-nums; }
+.zb-scope-body { padding:6px 12px 10px; }
+.zb-scope-body .zb-tg { margin:0; }
+/* Aufklappbare Dataset-Zeilen (Snapshots-Tab) */
+.zb-ds-row { cursor:pointer; }
+.zb-ds-row:hover { background:rgba(128,128,128,.10); }
+.zb-caret { display:inline-block; width:1em; color:#888; transition:transform .12s; }
+.zb-ds-row.open .zb-caret { transform:rotate(90deg); }
+.zb-ds-detail > td { padding:0 12px 12px 26px; }
+.zb-snaptbl { width:100%; border-collapse:collapse; }
+.zb-snaptbl th, .zb-snaptbl td { text-align:left; padding:5px 10px; font-size:13px;
+              border-bottom:1px solid rgba(128,128,128,.14); }
+.zb-snaptbl th { color:#999; font-size:11px; text-transform:uppercase; letter-spacing:.04em; }
+.zb-snaptbl td.num, .zb-snaptbl th.num { text-align:right; font-variant-numeric:tabular-nums; }
+.zb-snaptbl td.mono { font-family:monospace; font-size:12px; word-break:break-all; }
+.zb-warn { margin:0 0 16px; padding:10px 14px; border-radius:8px;
+           background:rgba(230,126,34,.14); border:1px solid rgba(230,126,34,.45);
+           color:inherit; font-size:14px; }
+
+.zb-tabs { display:flex; flex-wrap:wrap; gap:4px; border-bottom:2px solid var(--border-color,#444);
+           margin-bottom:18px; }
+.zb-tab { flex:0 0 auto; white-space:nowrap; padding:9px 18px; cursor:pointer; border:none; background:none;
+          font-size:14px; font-weight:600; color:#999; border-bottom:2px solid transparent;
+          margin-bottom:-2px; }
+.zb-tab:hover { color:inherit; }
+.zb-tab.active { color:inherit; border-bottom-color:#0E5E4E; }
+.zb-panel { display:none; }
+.zb-panel.active { display:block; }
+
+.zb-cards { display:flex; flex-wrap:wrap; gap:16px; }
+.zb-card { flex:1 1 260px; border:1px solid var(--border-color,#444);
+           border-radius:8px; padding:14px 16px; }
+.zb-card h3 { margin:0 0 10px; font-size:14px; text-transform:uppercase;
+              letter-spacing:.04em; color:#999; }
+.zb-card table { width:100%; border-collapse:collapse; }
+.zb-card td { padding:3px 0; font-size:14px; vertical-align:top; }
+.zb-card td.k { color:#999; white-space:nowrap; padding-right:14px; }
+.zb-card td.v { text-align:right; font-variant-numeric:tabular-nums; }
+.zb-snaps td.v { font-weight:600; }
+.zb-actions { margin:18px 0; }
+.zb-error { border:1px solid #C0392B; border-radius:8px; padding:14px 16px;
+            background:rgba(192,57,43,.08); }
+.zb-progress { margin-top:14px; padding:12px 14px; border-radius:8px;
+               background:rgba(30,136,229,.10); border:1px solid #1E88E5; }
+.zb-prog-log { margin:10px 0 0; padding:7px 11px; white-space:pre-wrap;
+               word-break:break-word; font-family:monospace;
+               font-size:12px; line-height:1.5; background:rgba(0,0,0,.05);
+               border:1px solid rgba(30,136,229,.30); border-radius:6px; }
+.zb-prog-log:empty { display:none; }
+.zb-prog-detail { margin:6px 0 0; padding:5px 11px; white-space:pre-wrap;
+                  word-break:break-word; font-family:monospace; font-size:12px;
+                  line-height:1.5; color:#1E88E5; }
+.zb-prog-detail:empty { display:none; }
+.zb-since { color:#888; font-size:12px; font-style:italic; margin-left:6px; }
+
+/* Gruppen-Box (Editor „Ziel bearbeiten" und „Ziel hinzufügen"). Die Felder darin
+   werden über Unraids Markdown-Konverter gerendert (native Inline-Hilfe). */
+.zb-grp { border:1px solid rgba(128,128,128,.22); border-radius:10px;
+          padding:4px 14px 8px; margin-bottom:18px; }
+.zb-grp h3 { font-size:12px; text-transform:uppercase; letter-spacing:.06em;
+             color:#999; margin:14px 0 8px; }
+
+/* Eingabe mit Datei-Auswahl (SSH-Schlüssel). */
+.zb-inp-file { display:flex; gap:8px; align-items:center; max-width:420px; }
+.zb-inp-file input { flex:1 1 auto; }
+.zb-browse { flex:0 0 auto; cursor:pointer; }
+.zb-browse[hidden] { display:none; }
+
+/* Array-Felder als Chip-/Listen-Editor (Includes/Excludes). */
+.zb-list { display:block; max-width:560px; }
+.zb-chips { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:9px; }
+.zb-chip { display:inline-flex; align-items:center; gap:8px; padding:3px 11px;
+           background:rgba(128,128,128,.16); border:1px solid rgba(128,128,128,.28);
+           border-radius:14px; font-size:13px; font-family:monospace; }
+.zb-chip-x { cursor:pointer; color:#999; font-size:13px; line-height:1; }
+.zb-chip-x:hover { color:#C0392B; }
+.zb-list-empty { color:#999; font-size:12px; font-style:italic; }
+.zb-list-add { display:flex; gap:8px; max-width:420px; }
+.zb-list-add input { flex:1 1 auto; }
+.zb-list-addbtn { flex:0 0 auto; cursor:pointer; }
+/* Feldmeldung (im nativen markdown-dd; inline nach dem Eingabefeld). */
+.fieldmsg { font-size:12px; }
+.fieldmsg.err { color:#E57373; }
+.fieldmsg.ok  { color:#81C784; }
+#zb-config-form .fieldmsg:not(:empty) { margin-left:8px; }
+/* Gruppen-Überschrift im nativen markdown-Formular (aus ####) dezent – einheitlich
+ * in allen Tabs (Konfig, Wartung, Pfade, Zeitplan …). */
+.zb-panel h4 { font-size:12px; text-transform:uppercase; letter-spacing:.06em;
+               color:#999; margin:20px 0 6px; }
+#zb-config-form h4:first-child, #zb-maint-form h4:first-child { margin-top:4px; }
+#zb-maint-form { max-width:680px; }
+.zb-savebar { position:sticky; bottom:0; padding:14px 10px; margin-top:8px;
+              display:flex; align-items:center; gap:14px; }
+.zb-savemsg { font-size:13px; }
+.zb-savemsg.err { color:#E57373; }
+.zb-savemsg.ok  { color:#81C784; }
+
+/* Ziele */
+.zb-tg { width:100%; border-collapse:collapse; margin-bottom:18px; }
+.zb-tg th, .zb-tg td { text-align:left; padding:10px 12px; font-size:14px;
+                       border-bottom:1px solid rgba(128,128,128,.18); vertical-align:top; }
+.zb-tg th { color:#999; text-transform:uppercase; font-size:12px; letter-spacing:.04em; }
+.zb-tg td.act { white-space:nowrap; }
+.zb-tg th.num, .zb-tg td.num { text-align:right; font-variant-numeric:tabular-nums; }
+.zb-tg tr.zb-tot td { border-top:2px solid rgba(128,128,128,.3); }
+.zb-sub { font-size:14px; margin:20px 0 8px; }
+.zb-tg td.empty { color:#999; text-align:center; padding:18px; }
+.zb-tg .muted { color:#999; font-size:12px; }
+.zb-tg .rowmsg { font-size:12px; margin-top:6px; }
+.zb-tg .rowmsg.err { color:#E57373; }
+.zb-tg .rowmsg.ok  { color:#81C784; }
+.zb-addtg { max-width:560px; }
+p.muted { color:#999; font-size:12px; }
+
+/* Wartung: Aktions-Knöpfe (Zeilen aus nativem markdown wie Konfig). Breite
+ * kommt inline am Button (Unraid streckt sonst auf volle dd-Breite). */
+.zb-act { white-space:nowrap; }
+.zb-act.danger { color:#B3261E; border-color:#B3261E; }
+
+/* Logs-Tab: vorformatierte, scrollbare Logausgabe. */
+.zb-log { margin:0; padding:14px 16px; max-height:60vh; overflow:auto;
+          white-space:pre-wrap; word-break:break-word; font-family:monospace;
+          font-size:12px; line-height:1.5; background:rgba(128,128,128,.10);
+          border:1px solid rgba(128,128,128,.22); border-radius:8px; }
+/* Unraid streckt <select> sonst auf volle Breite – schmal halten und neben das
+ * Label „Zeilen:" setzen. */
+.zb-actions label { vertical-align:middle; }
+#zb-log-n { margin-right:10px; width:auto !important; display:inline-block;
+            min-width:80px; vertical-align:middle; }
+#zb-log-filter { margin-left:10px; width:auto !important; display:inline-block;
+                 min-width:200px; vertical-align:middle; }
+#zb-log-count { margin-left:8px; vertical-align:middle; }
+
+/* Zeitplan: Stunde/Minute kompakt nebeneinander – Unraid streckt <select> sonst
+ * auf volle Breite (dann teilen sich die zwei die ganze Zeile). */
+#sch-hour, #sch-minute { width:auto !important; min-width:64px; flex:0 0 auto; }
+
+/* kleiner An/Aus-Schalter */
+.zb-switch { position:relative; display:inline-block; width:38px; height:20px; }
+.zb-switch input { opacity:0; width:0; height:0; }
+.zb-switch span { position:absolute; inset:0; background:#777; border-radius:20px;
+                  transition:.15s; cursor:pointer; }
+.zb-switch span:before { content:""; position:absolute; height:14px; width:14px; left:3px; top:3px;
+                         background:#fff; border-radius:50%; transition:.15s; }
+.zb-switch input:checked + span { background:#2E7D5B; }
+.zb-switch input:checked + span:before { transform:translateX(18px); }
+.zb-tg td.act .rowmsg { white-space:normal; word-break:break-word; max-width:220px; }
+
+/* Ziel-Editor (aufklappbare Zeile) – Felder via Unraids Markdown (native Hilfe). */
+.zb-edit[hidden] { display:none; }
+.zb-edit > td { background:rgba(128,128,128,.05); padding:4px 12px 12px; text-align:left; }
+.zb-edit-box { border:none; padding:2px 0 0; margin:0; }
+.zb-edit-box h3 { margin:8px 8px 6px; }
+.zb-edit-bar { display:flex; align-items:center; gap:14px; padding:12px 10px 4px; }
+.zb-edit-msg { font-size:13px; }
+.zb-edit-msg.err { color:#E57373; }
+.zb-edit-msg.ok  { color:#81C784; }
+
+/* Popup für lange Ausgaben (z. B. Remote-Test) */
+.zb-modal { position:fixed; inset:0; background:rgba(0,0,0,.5); z-index:9999;
+            display:flex; align-items:center; justify-content:center; }
+.zb-modal-box { background:#fafafa; color:#222; border:1px solid #bbb; border-radius:8px;
+                max-width:680px; width:90%; max-height:80vh; display:flex; flex-direction:column;
+                box-shadow:0 8px 30px rgba(0,0,0,.4); }
+.zb-modal-head { display:flex; align-items:center; justify-content:space-between;
+                 padding:12px 16px; border-bottom:1px solid #ddd; font-weight:600; }
+.zb-modal-head.ok  { color:#1B7A4B; }
+.zb-modal-head.err { color:#B3261E; }
+.zb-modal-x { flex:0 0 auto; width:34px !important; height:34px; min-width:0;
+              padding:0; margin:0; background:none; border:none; font-size:26px;
+              line-height:1; cursor:pointer; color:#666; }
+.zb-modal-x:hover { color:#222; }
+.zb-modal-body { margin:0; padding:14px 16px; overflow:auto; white-space:pre-wrap;
+                 word-break:break-word; font-size:13px; font-family:monospace; }
+/* Auswahl-Popup */
+.zb-pick-body { padding:14px 16px; }
+.zb-pick-body .zb-pick-hint { margin:0 0 10px; color:#888; font-size:13px; }
+.zb-pick-opt { display:block; width:100%; text-align:left; margin:0 0 8px; padding:9px 12px;
+               border:1px solid #bbb; border-radius:6px; background:none; color:inherit;
+               cursor:pointer; font-size:14px; }
+.zb-pick-opt:hover { background:rgba(128,128,128,.12); border-color:#1565C0; }
+/* Datei-Browser für Snapshot-Inhalt */
+.zb-fb-box { max-width:760px; }
+.zb-fb-crumbs { padding:8px 16px; border-bottom:1px solid #eee; font-size:13px;
+                word-break:break-all; display:flex; flex-wrap:wrap; align-items:center; gap:2px; }
+.zb-fb-crumbs a { color:#1565C0; text-decoration:none; }
+.zb-fb-crumbs a:hover { text-decoration:underline; }
+.zb-fb-sep { color:#999; }
+.zb-fb-body { margin:0; padding:8px 12px; overflow:auto; font-size:13px; }
+.zb-fb-tbl { width:100%; border-collapse:collapse; }
+.zb-fb-tbl td { padding:5px 8px; border-bottom:1px solid #eee; vertical-align:top; }
+.zb-fb-tbl td.num { text-align:right; font-variant-numeric:tabular-nums; color:#666;
+                white-space:nowrap; }
+.zb-fb-ic { width:1.6em; text-align:center; }
+.zb-fb-nm a { color:#222; text-decoration:none; word-break:break-all; }
+.zb-fb-nm a.zb-fb-dir { font-weight:600; color:#1565C0; }
+.zb-fb-nm a:hover { text-decoration:underline; }
+.zb-fb-dt { color:#888; white-space:nowrap; }
+.zb-fb-fhead { display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+               padding:4px 4px 10px; border-bottom:1px solid #eee; margin-bottom:8px; }
+.zb-fb-back { color:#1565C0; text-decoration:none; }
+.zb-fb-dl { margin-left:auto; background:#1565C0; color:#fff !important; text-decoration:none;
+            padding:5px 12px; border-radius:6px; font-size:13px; }
+.zb-fb-act { white-space:nowrap; text-align:right; }
+.zb-fb-restore { color:#1B7A4B; text-decoration:none; font-size:12px; white-space:nowrap; }
+.zb-fb-restore:hover { text-decoration:underline; }
+.zb-fb-prev { margin:0; padding:10px; background:#fff; border:1px solid #e0e0e0; border-radius:6px;
+              overflow:auto; max-height:55vh; white-space:pre-wrap; word-break:break-word;
+              font-size:12px; font-family:monospace; }
+</style>
+
+<div class="zb-wrap">
+
+<div class="zb-head">
+  <img src="/plugins/zfs-backup/zfs-backup.svg" alt="zfs-backup">
+  <div>
+    <h2>ZFS Backup
+      <?php if (is_array($st)): ?>
+        <?php if (!empty($st['running'])): ?>
+          <span class="zb-badge run" id="zb-badge">läuft</span>
+        <?php elseif (!empty($st['stale'])): ?>
+          <span class="zb-stale" id="zb-badge">veraltet</span>
+        <?php else: ?>
+          <span class="zb-badge idle" id="zb-badge">bereit</span>
+        <?php endif; ?>
+      <?php endif; ?>
+    </h2>
+    <?php if (is_array($st)): ?>
+      <span class="zb-ver">Version <?= zb_h($st['version']) ?></span>
+    <?php endif; ?>
+  </div>
+</div>
+
+<div class="zb-tabs">
+  <button type="button" class="zb-tab" data-tab="status">Status</button>
+  <button type="button" class="zb-tab" data-tab="config">Konfiguration</button>
+  <button type="button" class="zb-tab" data-tab="targets">Ziele</button>
+  <button type="button" class="zb-tab" data-tab="snapshots">Snapshots</button>
+  <button type="button" class="zb-tab" data-tab="schedule">Zeitplan</button>
+  <button type="button" class="zb-tab" data-tab="wartung">Wartung</button>
+  <button type="button" class="zb-tab" data-tab="logs">Logs</button>
+</div>
+
+<!-- ===================== Tab: Status ===================== -->
+<div class="zb-panel" data-panel="status">
+
+<?php if (!is_array($st)): ?>
+
+  <div class="zb-error">
+    <strong>Status konnte nicht gelesen werden.</strong><br>
+    Aufruf <code><?= zb_h($ZB_CLI) ?> --gui-init --json</code> lieferte keinen
+    gültigen Wert (Exit-Code <?= (int)$rc ?>).<br>
+    Ist das Plugin korrekt installiert? Prüfe in der Konsole:
+    <code>zfs-backup --config-check</code>.
+  </div>
+
+<?php else:
+  $lr      = $st['last_run']   ?? [];
+  $snaps   = $st['snapshots_created'] ?? [];
+  $tg      = $st['targets']    ?? [];
+  $orphans = (int)($st['orphan_datasets'] ?? 0);
+  $result  = $lr['result']     ?? '-';
+  $resOk   = ($result === 'success' || $result === 'Erfolg');
+  $resErr  = ($result === 'error'   || $result === 'Fehler');
+?>
+
+  <?php
+    // Die „Lauf aktiv"-Box ist immer im DOM (für die Live-Anzeige per SSE) und
+    // nur versteckt, wenn gerade nichts läuft. So kann sie auch direkt nach dem
+    // Start eingeblendet werden, ohne die Seite neu zu laden (run.php blockiert
+    // dann nicht). data-running steuert, ob beim Laden gleich gestreamt wird.
+    $isRunning = !empty($st['running']);
+    $pg = $st['progress'] ?? [];
+    $runLine = '';
+    if ($isRunning) {
+        $rl = [];
+        exec(escapeshellarg($ZB_CLI) . ' --log-tail 1 2>/dev/null', $rl);
+        $runLine = count($rl) ? $rl[count($rl) - 1] : '';
+    }
+  ?>
+  <div class="zb-progress" id="zb-prog" data-running="<?= $isRunning ? '1' : '0' ?>"<?= $isRunning ? '' : ' style="display:none"' ?>>
+    <strong>Lauf aktiv</strong>
+    <span id="zb-prog-pid"><?= ($isRunning && !empty($st['running_pid'])) ? '(PID ' . (int)$st['running_pid'] . ')' : '' ?></span>
+    — Phase: <strong id="zb-prog-phase"><?= $isRunning ? zb_h($pg['phase'] ?? null, '') : '' ?></strong>
+    <span class="zb-since" id="zb-prog-since"></span><br>
+    <span class="zb-ver" id="zb-prog-meta"><?= $isRunning ? 'gestartet ' . zb_h($pg['started'] ?? null, '') . ' · aktualisiert ' . zb_h($pg['updated'] ?? null, '') : '' ?></span>
+    <div class="zb-prog-log" id="zb-prog-log"><?= $isRunning ? zb_h($runLine, '') : '' ?></div>
+    <div class="zb-prog-detail" id="zb-prog-detail"><?= $isRunning ? zb_h($pg['detail'] ?? '', '') : '' ?></div>
+  </div>
+
+  <div class="zb-actions">
+    <input type="button" id="zb-run-btn" value="Lauf starten"<?= $isRunning ? ' style="display:none"' : '' ?>>
+    <input type="button" id="zb-sim-btn" value="Simulieren">
+    <span id="zb-run-msg" class="zb-savemsg"></span>
+  </div>
+
+<?php if (!empty($st['stale']) && empty($st['running'])):
+    $ah = (int)($st['backup_age_hours'] ?? 0);
+    $ageStr = $ah >= 48 ? (intdiv($ah, 24) . ' Tagen') : ($ah . ' Stunden');
+?>
+  <div class="zb-warn">
+    ⚠ Letztes erfolgreiches Backup vor <?= $ageStr ?> (Warnschwelle <?= (int)($st['stale_after_hours'] ?? 0) ?> h). Läuft der Zeitplan noch?
+  </div>
+<?php endif; ?>
+
+<?php if ($orphans > 0): ?>
+  <div class="zb-warn">
+    ⚠ <?= $orphans ?> verwaiste Ziel-Dataset(s) (Quell-Dataset gelöscht/inaktiv, Stand letzter Lauf). Werden <strong>nicht</strong> automatisch gelöscht – Aufräumen über <em>Wartung → „Verwaiste Datasets anzeigen/löschen"</em>.
+  </div>
+<?php endif; ?>
+
+  <div class="zb-cards">
+
+    <div class="zb-card">
+      <h3>Letzter Lauf</h3>
+      <table>
+        <tr><td class="k">Zeitpunkt</td><td class="v"><?= zb_h($lr['timestamp'] ?? null) ?></td></tr>
+        <tr><td class="k">Ergebnis</td><td class="v">
+          <?php if ($resOk): ?><span class="zb-badge ok">Erfolg</span>
+          <?php elseif ($resErr): ?><span class="zb-badge err">Fehler</span>
+          <?php else: ?><?= zb_h($result) ?><?php endif; ?>
+        </td></tr>
+        <tr><td class="k">Dauer</td><td class="v"><?= zb_h($lr['runtime_human'] ?? null) ?></td></tr>
+        <tr><td class="k">Letzter Erfolg</td><td class="v"><?= zb_h($st['last_success'] ?? null) ?></td></tr>
+        <?php if (!empty($st['last_error']) && $st['last_error'] !== '-'): ?>
+        <tr><td class="k">Letzter Fehler</td><td class="v"><?= zb_h($st['last_error']) ?></td></tr>
+        <?php endif; ?>
+      </table>
+    </div>
+
+    <div class="zb-card zb-snaps">
+      <h3>Im letzten Lauf neu erstellt</h3>
+      <table>
+        <tr><td class="k">Gesamt</td><td class="v"><?= (int)($snaps['total'] ?? 0) ?></td></tr>
+        <tr><td class="k">Stündlich</td><td class="v"><?= (int)($snaps['hourly'] ?? 0) ?></td></tr>
+        <tr><td class="k">Täglich</td><td class="v"><?= (int)($snaps['daily'] ?? 0) ?></td></tr>
+        <tr><td class="k">Wöchentlich</td><td class="v"><?= (int)($snaps['weekly'] ?? 0) ?></td></tr>
+        <tr><td class="k">Monatlich</td><td class="v"><?= (int)($snaps['monthly'] ?? 0) ?></td></tr>
+        <tr><td class="k">Jährlich</td><td class="v"><?= (int)($snaps['yearly'] ?? 0) ?></td></tr>
+      </table>
+    </div>
+
+    <div class="zb-card">
+      <h3>Aktive Ziele</h3>
+      <table>
+        <tr><td class="k">Lokal</td><td class="v"><?= (int)($tg['local_active'] ?? 0) ?></td></tr>
+        <tr><td class="k">Remote</td><td class="v"><?= (int)($tg['remote_active'] ?? 0) ?></td></tr>
+        <tr><td class="k">Verwaiste Datasets</td><td class="v"><?= $orphans ?></td></tr>
+      </table>
+    </div>
+
+  </div>
+
+<?php
+  /* Kapazitäts-Übersicht (Stand letzter Lauf). Pro Quelle-Pool und Ziel ein
+   * Eintrag: belegt/frei/gesamt + Auslastungsbalken. Quelle-Einträge sind das
+   * Pool-Objekt selbst; lokale/remote Ziele tragen es unter "pool". */
+  $capRows = [];
+  if (is_array($cap)) {
+      foreach (($cap['source'] ?? []) as $p)
+          $capRows[] = ['Quelle: ' . ($p['pool'] ?? ''), $p];
+      foreach (($cap['local'] ?? []) as $t)
+          $capRows[] = [(($t['label'] ?? '') ?: ($t['id'] ?? 'Lokal')), ($t['pool'] ?? [])];
+      foreach (($cap['remote'] ?? []) as $t)
+          $capRows[] = [(($t['label'] ?? '') ?: ($t['id'] ?? 'Remote')), ($t['pool'] ?? [])];
+  }
+?>
+<?php if ($capRows): ?>
+  <h3 class="zb-sub">Kapazität <span class="muted" style="font-weight:400">(Stand letzter Lauf)</span></h3>
+  <table class="zb-tg zb-cap">
+    <thead><tr>
+      <th>Speicher</th><th class="num">Belegt</th><th class="num">Frei</th>
+      <th class="num">Gesamt</th><th>Auslastung</th>
+    </tr></thead>
+    <tbody>
+    <?php foreach ($capRows as $row): $label = $row[0]; $p = $row[1];
+        $pct = max(0, min(100, (int)($p['cap'] ?? 0)));
+        $lvl = $pct >= 90 ? 'high' : ($pct >= 70 ? 'mid' : 'low');
+    ?>
+      <tr>
+        <td><?= zb_h($label) ?></td>
+        <td class="num"><?= zb_bytes($p['alloc'] ?? 0) ?></td>
+        <td class="num"><?= zb_bytes($p['free'] ?? 0) ?></td>
+        <td class="num"><?= zb_bytes($p['size'] ?? 0) ?></td>
+        <td><div class="zb-bar"><div class="zb-bar-fill <?= $lvl ?>" style="width:<?= $pct ?>%"></div><span class="zb-bar-lbl"><?= $pct ?> %</span></div></td>
+      </tr>
+    <?php endforeach; ?>
+    </tbody>
+  </table>
+<?php else: ?>
+  <h3 class="zb-sub">Kapazität</h3>
+  <p class="muted">Noch keine Kapazitätsdaten – werden beim nächsten Lauf erfasst.</p>
+<?php endif; ?>
+
+<?php endif; ?>
+
+</div><!-- /panel status -->
+
+<!-- ===================== Tab: Konfiguration ===================== -->
+<div class="zb-panel" data-panel="config">
+
+<?php if (!is_array($schema) || !is_array($values)): ?>
+
+  <div class="zb-error">
+    <strong>Konfiguration konnte nicht gelesen werden.</strong><br>
+    <code>--gui-init</code> (rc <?= (int)$rc ?>) lieferte kein gültiges JSON für Schema/Werte.
+  </div>
+
+<?php else:
+  // Felder nach Gruppe ordnen; TARGETS gehört in den (späteren) Ziele-Tab.
+  $groups = [];
+  foreach ($schema as $f) {
+      if (($f['name'] ?? '') === 'TARGETS') continue;
+      // Zeitplan hat einen eigenen Tab (Presets/Cron) – nicht im Konfig-Formular zeigen.
+      if (($f['group'] ?? '') === 'Zeitplan') continue;
+      $groups[$f['group']][] = $f;
+  }
+?>
+
+<?php
+  /* Konfig-Felder als nativen Unraid-„markdown"-Block aufbauen: pro Option ein
+   * Definitionslisten-Eintrag (Name als Term, Eingabefeld als dd) plus – falls
+   * vorhanden – die Beschreibung als Blockquote. Unraid macht daraus die native
+   * Inline-Hilfe (cursor:help am Namen, Klick klappt die hellblaue Box auf).
+   * Der Name steht in Backticks (`code`), damit Markdown Unterstriche in
+   * Options-Namen wie WAKE_ON_LAN nicht als Hervorhebung missdeutet. */
+  $md = "\n";
+  foreach ($groups as $gname => $fields) {
+      $md .= '#### ' . $gname . "\n\n";
+      foreach ($fields as $f) {
+          $name = $f['name'];
+          $type = $f['type'];
+          $desc = $f['description'];
+          $cur  = $values[$name] ?? null;
+          // Aktuell keine geheimen Optionen; Maskierung bleibt für künftige Secrets.
+          $isSecret = false;
+
+          $md .= '`' . $name . "`:\n";
+          $md .= ': ' . zb_cfg_input($name, $type, $cur, $isSecret) . ' <span class="fieldmsg"></span>' . "\n";
+          if ($desc !== '' && $desc !== '-') {
+              $md .= "\n> " . preg_replace('/\s+/', ' ', $desc) . "\n";
+          }
+          $md .= "\n";
+      }
+  }
+?>
+  <input type="hidden" id="zb-csrf" value="<?= zb_a($csrf) ?>">
+
+<div id="zb-config-form"><?= zb_md($md) ?></div>
+
+  <div class="zb-savebar">
+    <input type="button" id="zb-save-btn" value="Speichern">
+    <span class="zb-savemsg" id="zb-save-msg"></span>
+  </div>
+
+<?php
+  /* Pfade read-only: vom Plugin/Wrapper gesetzt (Config auf dem Flash,
+   * Laufzeitdaten unter cache/system), nicht editierbar – siehe --status --json.
+   * Wie das Konfig-/Wartung-Formular über die native Markdown-Definitionsliste
+   * (Label als Term, Wert als dd) rendern – identischer Look statt Fremdtabelle. */
+  $paths = (is_array($st) && isset($st['paths']) && is_array($st['paths'])) ? $st['paths'] : [];
+  if ($paths):
+  $pmd  = "#### Pfade\n\n";
+  $pmd .= "Konfiguration:\n: " . zb_h($paths['config_file'] ?? '') . "\n\n";
+  $pmd .= "Daten (`DATA_DIR`):\n: " . zb_h($paths['data_dir'] ?? '') . "\n\n";
+  $pmd .= "Laufzeit (`RUNTIME_DIR`):\n: " . zb_h($paths['runtime_dir'] ?? '') . "\n\n";
+  $pmd .= "Logs:\n: " . zb_h($paths['log_dir'] ?? '') . "\n\n";
+  $pmd .= "State:\n: " . zb_h($paths['state_dir'] ?? '') . "\n\n";
+  $pmd .= "Lock:\n: " . zb_h($paths['lock_dir'] ?? '') . "\n";
+?>
+  <div id="zb-paths-form"><?= zb_md($pmd) ?></div>
+  <p class="muted" style="margin:6px 0 0">
+    Vom Plugin automatisch gesetzt – Konfiguration auf dem Flash (überlebt Updates),
+    schreiblastige Laufzeitdaten unter cache/system (von der Sicherung
+    ausgeschlossen). Nicht editierbar.
+  </p>
+<?php endif; ?>
+
+<?php endif; ?>
+
+</div><!-- /panel config -->
+
+<!-- ===================== Tab: Ziele ===================== -->
+<div class="zb-panel" data-panel="targets">
+
+<?php if (!is_array($targets)): ?>
+
+  <div class="zb-error">
+    <strong>Ziele konnten nicht gelesen werden.</strong><br>
+    <code>--gui-init --json</code> lieferte kein gültiges JSON für Ziele (rc <?= (int)$rc ?>).
+  </div>
+
+<?php else: ?>
+
+  <input type="hidden" id="zb-csrf-t" value="<?= zb_a($csrf) ?>">
+
+  <table class="zb-tg">
+    <thead>
+      <tr>
+        <th class="num">ID</th><th>Ziel</th><th>Typ</th><th>Ziel-Dataset</th><th>Aktiv</th>
+        <th class="act">Aktionen</th>
+      </tr>
+    </thead>
+    <tbody>
+    <?php if (count($targets) === 0): ?>
+      <tr><td colspan="6" class="empty">Keine Ziele konfiguriert.</td></tr>
+    <?php else: foreach ($targets as $t):
+      $tid  = $t['id'];
+      $rem  = $t['remote'] ?? null;
+    ?>
+      <tr data-id="<?= zb_a($tid) ?>">
+        <td class="num"><?= zb_h($tid) ?></td>
+        <td>
+          <strong><?= zb_h($t['label'] ?? $tid) ?></strong>
+          <?php if (is_array($rem)): ?><br><span class="muted">Host: <?= zb_h($rem['host'] ?? null) ?></span><?php endif; ?>
+        </td>
+        <td><?= zb_h($t['type'] ?? null) ?></td>
+        <td><?= zb_h($t['base_dataset'] ?? null) ?></td>
+        <td>
+          <label class="zb-switch">
+            <input type="checkbox" class="zb-enabled" <?= !empty($t['enabled']) ? 'checked' : '' ?>>
+            <span></span>
+          </label>
+        </td>
+        <td class="act">
+          <input type="button" class="zb-edit-btn" value="Bearbeiten">
+          <input type="button" class="zb-test" value="Testen">
+          <input type="button" class="zb-del" value="Löschen">
+          <div class="rowmsg"></div>
+        </td>
+      </tr>
+
+      <?php $isRem = is_array($rem); ?>
+      <tr class="zb-edit" data-edit-id="<?= zb_a($tid) ?>"
+          data-orig-ssh="<?= $isRem ? zb_a($rem['ssh_options'] ?? '') : '' ?>" hidden>
+        <td colspan="6">
+          <div class="zb-grp zb-edit-box">
+            <h3>Ziel bearbeiten — <?= zb_h($tid) ?></h3>
+
+            <?php
+              $emd  = zb_ed_md('Bezeichnung', 'LABEL – frei wählbarer Anzeigename.',
+                               zb_ed_text('LABEL', $t['label'] ?? '', $tid));
+              $emd .= zb_ed_md('Ziel-Dataset', 'BASE_DATASET – Basis-Dataset auf dem Ziel.',
+                               zb_ed_text('BASE_DATASET', $t['base_dataset'] ?? ''));
+              if ($isRem) {
+                  $emd .= zb_ed_md('SSH-Host', 'HOST – z. B. root@192.168.1.2.',
+                                   zb_ed_text('HOST', $rem['host'] ?? '', 'root@host'));
+                  // Nur die Schlüsseldatei ist einstellbar; die übrigen SSH-Optionen
+                  // (inkl. IdentitiesOnly=yes) setzt die GUI fix (sshCompose im JS).
+                  $emd .= zb_ed_md('SSH-Schlüssel (Datei)',
+                                   'Pfad zur privaten Schlüsseldatei – für die Replikation per SSH erforderlich. Wird als „-i <Datei>" ergänzt.',
+                                   '<span class="zb-inp-file">'
+                                   . '<input type="text" data-ssh="key" placeholder="/root/.ssh/id_ed25519">'
+                                   . '<button type="button" class="zb-browse" hidden title="Durchsuchen">'
+                                   . '<i class="fa fa-folder-o"></i> Durchsuchen</button>'
+                                   . '</span>');
+                  $emd .= zb_ed_md('Wake-on-LAN', 'WAKE_ON_LAN – Ziel vor der Replikation aufwecken.',
+                                   zb_ed_bool('WAKE_ON_LAN', !empty($rem['wake_on_lan'])));
+                  $emd .= zb_ed_md('WOL-MAC', 'WAKE_MAC – MAC-Adresse für das Magic Packet.',
+                                   zb_ed_text('WAKE_MAC', $rem['wake_mac'] ?? '', 'aa:bb:cc:dd:ee:ff'));
+                  $emd .= zb_ed_md('WOL-Timeout (s)', 'WAKE_TIMEOUT_SECONDS – max. Wartezeit aufs Hochfahren.',
+                                   zb_ed_num('WAKE_TIMEOUT_SECONDS', $rem['wake_timeout_seconds'] ?? 0));
+                  $emd .= zb_ed_md('WOL-Prüfintervall (s)', 'WAKE_CHECK_INTERVAL_SECONDS – Abstand der Erreichbarkeitsprüfung.',
+                                   zb_ed_num('WAKE_CHECK_INTERVAL_SECONDS', $rem['wake_check_interval_seconds'] ?? 0));
+                  $emd .= zb_ed_md('Wiederholungen', 'RETRY_ATTEMPTS – Versuche bei Replikationsfehler.',
+                                   zb_ed_num('RETRY_ATTEMPTS', $rem['retry_attempts'] ?? 0));
+                  $emd .= zb_ed_md('Wartezeit (s)', 'RETRY_WAIT_SECONDS – Pause zwischen den Versuchen.',
+                                   zb_ed_num('RETRY_WAIT_SECONDS', $rem['retry_wait_seconds'] ?? 0));
+              }
+              echo zb_md($emd);
+            ?>
+
+            <div class="zb-edit-bar">
+              <input type="button" class="zb-edit-save" value="Speichern">
+              <input type="button" class="zb-edit-close" value="Schließen">
+              <span class="zb-edit-msg"></span>
+            </div>
+          </div>
+        </td>
+      </tr>
+    <?php endforeach; endif; ?>
+    </tbody>
+  </table>
+
+  <div class="zb-grp zb-addtg">
+    <h3>Ziel hinzufügen</h3>
+    <?php
+      // Label / Typ / Ziel-Dataset als nativer Markdown-Block; die SSH-Host-Zeile
+      // steckt in einem eigenen Block (Toggle-div), da sie nur bei Remote gilt.
+      // Die ID wird automatisch (numerisch) vergeben – der Nutzer wählt nur das Label.
+      $amd  = zb_ed_md('Bezeichnung', 'Frei wählbarer Anzeigename (LABEL).',
+                       '<input type="text" id="add-label" placeholder="z. B. nas2">');
+      $amd .= zb_ed_md('Typ', '',
+                       '<select id="add-type"><option value="local">local</option><option value="remote">remote</option></select>');
+      $amd .= zb_ed_md('Ziel-Dataset', 'Basis-Dataset auf dem Ziel (BASE_DATASET).',
+                       '<input type="text" id="add-base" placeholder="z. B. backups oder files/nas1">');
+      echo zb_md($amd);
+
+      $amdHost = zb_ed_md('SSH-Host', 'Nur Remote, z. B. root@192.168.1.2.',
+                          '<input type="text" id="add-host" placeholder="root@host">');
+    ?>
+    <div id="add-host-row" style="display:none"><?= zb_md($amdHost) ?></div>
+    <div class="zb-savebar">
+      <input type="button" id="add-btn" value="Hinzufügen">
+      <span class="zb-savemsg" id="add-msg"></span>
+    </div>
+    <p class="muted">SSH-Schlüssel und weitere Remote-Optionen lassen sich nach dem Anlegen über „Bearbeiten" setzen.</p>
+  </div>
+
+<?php endif; ?>
+
+</div><!-- /panel targets -->
+
+<!-- ===================== Tab: Snapshots ===================== -->
+<div class="zb-panel" data-panel="snapshots">
+  <div class="zb-actions">
+    <input type="button" id="zb-snap-reload" value="Live aktualisieren"
+           title="Fragt alle aktiven Ziele direkt per zfs ab (kann Platten wecken). Standard zeigt den Stand vom letzten Lauf.">
+  </div>
+  <div id="zb-snap-body"><p class="muted">Wird geladen …</p></div>
+</div><!-- /panel snapshots -->
+
+<!-- ===================== Tab: Zeitplan ===================== -->
+<div class="zb-panel" data-panel="schedule">
+<?php
+  /* Felder als native Markdown-Definitionsliste wie das Konfig-Formular. Die
+   * Auswahl steuert per JS, welche Felder aktiv sind; der Cron-Ausdruck wird
+   * daraus berechnet (Quelle der Wahrheit fürs Speichern). */
+  $dows = ['1'=>'Montag','2'=>'Dienstag','3'=>'Mittwoch','4'=>'Donnerstag',
+           '5'=>'Freitag','6'=>'Samstag','0'=>'Sonntag'];
+  $dowOpts = '';
+  foreach ($dows as $v => $n) { $dowOpts .= '<option value="'.$v.'">'.$n.'</option>'; }
+  // Stunden 00–23 / Minuten 00–59 als Auswahloptionen (Wert = Zahl, Anzeige 2-stellig).
+  $hourOpts = '';
+  for ($h = 0; $h < 24; $h++) { $hourOpts .= '<option value="'.$h.'">'.str_pad((string)$h,2,'0',STR_PAD_LEFT).'</option>'; }
+  $minOpts = '';
+  for ($m = 0; $m < 60; $m++) { $minOpts .= '<option value="'.$m.'">'.str_pad((string)$m,2,'0',STR_PAD_LEFT).'</option>'; }
+
+  $smd  = "#### Zeitplan\n\n";
+  $smd .= zb_ed_md('Automatisch ausführen',
+            'Startet den Backup-Lauf geplant über Unraids Cron. Aus = kein Zeitplan.',
+            '<select id="sch-enabled"><option value="no">nein</option><option value="yes">ja</option></select>');
+  $smd .= zb_ed_md('Häufigkeit',
+            'Wie oft gestartet wird. „Benutzerdefiniert" erlaubt einen eigenen Cron-Ausdruck.',
+            '<select id="sch-freq">'
+            . '<option value="hourly">Stündlich</option>'
+            . '<option value="daily">Täglich</option>'
+            . '<option value="weekly">Wöchentlich</option>'
+            . '<option value="custom">Benutzerdefiniert (Cron)</option>'
+            . '</select>');
+  $smd .= zb_ed_md('Uhrzeit',
+            'Startzeit (Stunde und Minute) für „Täglich" und „Wöchentlich".',
+            '<span style="display:inline-flex;align-items:center;gap:6px">'
+            . '<select id="sch-hour">' . $hourOpts . '</select> :'
+            . '<select id="sch-minute">' . $minOpts . '</select></span>');
+  $smd .= zb_ed_md('Wochentag',
+            'Nur bei „Wöchentlich".',
+            '<select id="sch-dow">' . $dowOpts . '</select>');
+  $smd .= zb_ed_md('Minute',
+            'Nur bei „Stündlich" – zu welcher Minute der Stunde.',
+            '<select id="sch-min">' . $minOpts . '</select>');
+  $smd .= zb_ed_md('Cron-Ausdruck',
+            'Fünf Felder: Minute Stunde Tag Monat Wochentag. Bei den Presets automatisch berechnet, bei „Benutzerdefiniert" frei editierbar.',
+            '<input type="text" id="sch-cron" placeholder="z. B. 0 2 * * *" readonly>');
+?>
+  <div id="zb-schedule-form"><?= zb_md($smd) ?></div>
+  <p class="muted" id="zb-sch-state" style="margin:6px 0 0"></p>
+  <div class="zb-savebar">
+    <input type="button" id="zb-sch-save" value="Speichern">
+    <span class="zb-savemsg" id="zb-sch-msg"></span>
+  </div>
+</div><!-- /panel schedule -->
+
+<!-- ===================== Tab: Wartung ===================== -->
+<div class="zb-panel" data-panel="wartung">
+
+<?php
+  /* Aktions-Knopf als EINZEILIGE HTML-Zeichenkette (für zb_ed_md). */
+  function zb_maint_btn(string $act, string $title, string $text,
+                        string $confirm = '', bool $danger = false,
+                        string $phrase = ''): string {
+      $cls = 'zb-act' . ($danger ? ' danger' : '');
+      // Inhaltsbreite erzwingen – der dd ist bei Unraid ein Flex/Grid-Container,
+      // der den Button sonst streckt. width:fit-content (kein Strecken in Block/
+      // Grid) + flex:0 0 auto (kein Wachsen im Flex) + justify-self:start, alles
+      // inline-!important, deckt alle Layout-Fälle ab.
+      $st = 'width:fit-content !important;flex:0 0 auto !important;justify-self:start !important';
+      return '<button type="button" class="' . $cls . '" style="' . $st . '"'
+           . ' data-act="' . zb_a($act) . '" data-title="' . zb_a($title) . '"'
+           . ($confirm !== '' ? ' data-confirm="' . zb_a($confirm) . '"' : '')
+           . ($phrase !== ''  ? ' data-phrase="'  . zb_a($phrase)  . '"' : '')
+           . '>' . zb_h($text) . '</button>';
+  }
+
+  // Prüfen (read-only): Label, Hinweis (native Inline-Hilfe), Knopf.
+  $mmd  = "#### Prüfen\n\n";
+  $mmd .= zb_ed_md('Snapshots prüfen',
+            'Verwaltete Snapshots gegen die Quelle abgleichen. Nach dem Klick wählst du den Umfang: alles (Quelle + alle Ziele), nur die Quelle oder ein einzelnes Ziel. Verändert nichts; ein Remote-Ziel wird dafür ggf. per WOL geweckt.',
+            zb_maint_btn('verify-pick', 'Snapshots prüfen', 'Prüfen'));
+  $mmd .= zb_ed_md('Verwaiste Datasets anzeigen',
+            'Ziel-Datasets, deren Quell-Dataset nicht mehr existiert (z. B. gelöscht). Nach dem Klick wählst du das Ziel. Dry-Run – zeigt nur, was beim Aufräumen gelöscht würde, löscht nichts.',
+            zb_maint_btn('cleanup-orphans-dry', 'Verwaiste Datasets (Dry-Run)', 'Anzeigen'));
+
+  // Wartung (destruktiv): zusätzlich data-confirm + roter Knopf.
+  $mmd .= "#### Wartung\n\n";
+  $mmd .= zb_ed_md('Statistiken zurücksetzen',
+            'Gespeicherte Laufstatistiken löschen.',
+            zb_maint_btn('reset-statistics', 'Statistiken zurücksetzen', 'Zurücksetzen',
+              'Gespeicherte Laufstatistiken wirklich löschen?', true));
+  $mmd .= zb_ed_md('Laufstatus zurücksetzen',
+            'Letzten Erfolg und letzten Fehler zurücksetzen.',
+            zb_maint_btn('reset-run-status', 'Laufstatus zurücksetzen', 'Zurücksetzen',
+              'Letzten Erfolg und letzten Fehler wirklich zurücksetzen?', true));
+  $mmd .= zb_ed_md('Logs löschen',
+            'Alle Logdateien entfernen.',
+            zb_maint_btn('delete-logs', 'Logs löschen', 'Löschen',
+              'Alle Logdateien wirklich löschen?', true));
+  $mmd .= zb_ed_md('Verwaiste Datasets löschen',
+            'Entfernt Ziel-Datasets, deren Quell-Dataset nicht mehr existiert (zfs destroy -r). Nach dem Klick wählst du das Ziel, danach folgt die Bestätigung. Vorher unbedingt „Verwaiste Datasets anzeigen" prüfen!',
+            zb_maint_btn('cleanup-orphans', 'Verwaiste Datasets löschen', 'Löschen',
+              'Verwaiste Ziel-Datasets wirklich löschen? Das entfernt die Backups gelöschter Quell-Datasets unwiderruflich (lokal und remote).', true,
+              'VERWAISTE LOESCHEN'));
+  $mmd .= zb_ed_md('Historie ausdünnen',
+            'Neuen Daily anlegen, Quelle darauf prunen, Ziele nachziehen. Ältere verwaltete Snapshots werden entfernt.',
+            zb_maint_btn('thin-history', 'Historie ausdünnen', 'Ausdünnen',
+              'Snapshot-Historie wirklich ausdünnen? Ältere verwaltete Snapshots werden entfernt.', true));
+  $mmd .= zb_ed_md('Verwaltete Snapshots löschen',
+            'Alle Snapshots mit Prefix auf Quelle und aktiven Zielen entfernen.',
+            zb_maint_btn('delete-managed-snapshots', 'Verwaltete Snapshots löschen', 'Löschen',
+              'ALLE verwalteten Snapshots auf Quelle und aktiven Zielen wirklich löschen? Das lässt sich nicht rückgängig machen.', true,
+              'SNAPSHOTS LÖSCHEN'));
+?>
+<div id="zb-maint-form"><?= zb_md($mmd) ?></div>
+
+</div><!-- /panel wartung -->
+
+<!-- ===================== Tab: Logs ===================== -->
+<div class="zb-panel" data-panel="logs">
+  <div class="zb-actions">
+    <label>Zeilen:
+      <select id="zb-log-n">
+        <option value="50">50</option>
+        <option value="200" selected>200</option>
+        <option value="500">500</option>
+        <option value="1000">1000</option>
+      </select>
+    </label>
+    <input type="button" id="zb-log-reload" value="Aktualisieren">
+    <input type="search" id="zb-log-filter" placeholder="Filtern …">
+    <span class="muted" id="zb-log-count"></span>
+  </div>
+  <pre id="zb-log-body" class="zb-log"><span class="muted">Wird geladen …</span></pre>
+</div><!-- /panel logs -->
+
+</div><!-- /zb-wrap -->
+
+<!-- Auswahl-Popup (z. B. Ziel für Verwaiste-Datasets-Aktionen) -->
+<div id="zb-pick" class="zb-modal" style="display:none">
+  <div class="zb-modal-box" style="max-width:440px">
+    <div class="zb-modal-head"><span id="zb-pick-title"></span>
+      <button type="button" id="zb-pick-close" class="zb-modal-x" aria-label="Schließen"
+        style="flex:0 0 auto;width:34px;height:34px;min-width:0;padding:0">&times;</button></div>
+    <div id="zb-pick-body" class="zb-pick-body"></div>
+  </div>
+</div>
+
+<div id="zb-modal" class="zb-modal" style="display:none">
+  <div class="zb-modal-box">
+    <div class="zb-modal-head"><span id="zb-modal-title"></span>
+      <button type="button" id="zb-modal-close" class="zb-modal-x" aria-label="Schließen"
+        style="flex:0 0 auto;width:34px;height:34px;min-width:0;padding:0">&times;</button></div>
+    <pre id="zb-modal-body" class="zb-modal-body"></pre>
+  </div>
+</div>
+
+<!-- Datei-Browser für Snapshot-Inhalt (lazy je Verzeichnis) -->
+<div id="zb-fb" class="zb-modal" style="display:none">
+  <div class="zb-modal-box zb-fb-box">
+    <div class="zb-modal-head"><span id="zb-fb-title"></span>
+      <button type="button" id="zb-fb-close" class="zb-modal-x" aria-label="Schließen"
+        style="flex:0 0 auto;width:34px;height:34px;min-width:0;padding:0">&times;</button></div>
+    <div id="zb-fb-crumbs" class="zb-fb-crumbs"></div>
+    <div id="zb-fb-body" class="zb-fb-body"></div>
+  </div>
+</div>
+
+<script>
+(function(){
+  // CSRF-Token: bevorzugt ein serverseitig gerendertes verstecktes Feld
+  // (gleiche Quelle wie die Endpoints), sonst die globale WebGUI-Variable.
+  function zbCsrf(){
+    var el = document.getElementById('zb-csrf') || document.getElementById('zb-csrf-t');
+    if (el && el.value) return el.value;
+    if (typeof csrf_token !== 'undefined' && csrf_token) return csrf_token;
+    return '';
+  }
+
+  // POST an einen Plugin-Endpoint; params ist ein Objekt, fields ein optionales
+  // Objekt für fields[KEY]=VAL. Liefert ein Promise mit {status, data}.
+  function zbPost(url, params, fields){
+    var body = 'csrf_token=' + encodeURIComponent(zbCsrf());
+    Object.keys(params || {}).forEach(function(k){
+      body += '&' + encodeURIComponent(k) + '=' + encodeURIComponent(params[k]);
+    });
+    Object.keys(fields || {}).forEach(function(k){
+      body += '&fields[' + encodeURIComponent(k) + ']=' + encodeURIComponent(fields[k]);
+    });
+    var status = 0;
+    return fetch(url, {
+      method:'POST',
+      headers:{'Content-Type':'application/x-www-form-urlencoded'},
+      body: body
+    }).then(function(r){ status = r.status; return r.text(); })
+      .then(function(text){
+        var data; try { data = JSON.parse(text); }
+        catch(e){ data = { error: 'HTTP ' + status + ': ' + text.replace(/\s+/g,' ').slice(0,160) }; }
+        return { status: status, data: data };
+      });
+  }
+
+  // ---- Snapshots-Tab lazy laden (teures --snapshots --json erst bei Bedarf) --
+  var snapBody = document.getElementById('zb-snap-body');
+  var snapLoaded = false;
+  // Standard: Cache vom letzten Lauf (kein zfs, keine Platte geweckt).
+  // live=true (Knopf „Aktualisieren") fragt alle Ziele aktiv ab.
+  function zbLoadSnapshots(force, live){
+    if (!snapBody || (snapLoaded && !force)) return;
+    snapLoaded = true;
+    snapBody.innerHTML = '<p class="muted">' + (live ? 'Aktualisiere live …' : 'Wird geladen …') + '</p>';
+    fetch('/plugins/zfs-backup/include/snapshots.php' + (live ? '?live=1' : ''))
+      .then(function(r){ return r.text(); })
+      .then(function(html){ snapBody.innerHTML = html; })
+      .catch(function(e){ snapBody.innerHTML = '<div class="zb-error">Fehler beim Laden: ' + e + '</div>'; });
+  }
+  var snapReload = document.getElementById('zb-snap-reload');
+  if (snapReload) snapReload.addEventListener('click', function(){ zbLoadSnapshots(true, true); });
+
+  // ---- Aufklappbare Dataset-Zeilen: Snapshots mit vollem Namen + Größe -------
+  // (Grundlage fürs spätere gezielte Wiederherstellen.) Klick auf eine
+  // Dataset-Zeile lädt einmalig die Snapshots des Datasets (dataset-snapshots.php
+  // -> Kern --dataset-snapshots, aus dem State-Cache -> kein Live-zfs, kein
+  // Plattenwecken) und klappt sie auf. Delegation überlebt das Fragment-Neuladen.
+  function zbBytes(n){
+    n = parseFloat(n) || 0;
+    var u = ['B','KiB','MiB','GiB','TiB','PiB'], i = 0;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    var d = (i === 0) ? 0 : (n < 10 ? 2 : (n < 100 ? 1 : 0));
+    return n.toFixed(d) + ' ' + u[i];
+  }
+  function zbEsc(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+  function zbRenderSnaps(d){
+    var s = (d && d.snapshots) || [];
+    if (!s.length) return '<p class="muted" style="margin:0">Keine verwalteten Snapshots.</p>';
+    var ds = (d && d.dataset) || '', scope = (d && d.scope) || 'source';
+    var h = '<table class="zb-snaptbl"><thead><tr><th>Snapshot</th><th>Typ</th>'
+          + '<th class="num" title="Referenzierte Datenmenge – das, was beim Wiederherstellen herauskommt">Größe</th>'
+          + '<th class="num" title="Exklusiv belegter Platz – wird beim Löschen dieses Snapshots frei">Belegt</th>'
+          + '<th>Erstellt</th><th></th></tr></thead><tbody>';
+    s.forEach(function(x){
+      h += '<tr><td class="mono">' + zbEsc(x.snapshot) + '</td><td>' + zbEsc(x.type)
+         + '</td><td class="num">' + zbBytes(x.size) + '</td><td class="num">' + zbBytes(x.used)
+         + '</td><td>' + zbEsc(x.created) + '</td>'
+         + '<td class="num"><button type="button" class="zb-fb-open" data-ds="' + zbEsc(ds)
+         + '" data-scope="' + zbEsc(scope) + '" data-snap="' + zbEsc(x.snapshot)
+         + '" title="Inhalt dieses Snapshots durchsuchen (greift auf die Platte zu)">Durchsuchen</button></td></tr>';
+    });
+    return h + '</tbody></table>';
+  }
+  if (snapBody) {
+    snapBody.addEventListener('click', function(ev){
+      // Scope-Kopf (Quelle/Ziel) auf-/zuklappen – die Dataset-Tabelle steckt
+      // im zb-scope-body und ist schon serverseitig gerendert (nur Zählungen).
+      var head = ev.target.closest('.zb-scope-head');
+      if (head && snapBody.contains(head)) {
+        var scope = head.parentNode;
+        var body  = head.nextElementSibling;
+        if (body && body.classList.contains('zb-scope-body')) {
+          var hidden = (body.style.display === 'none');
+          body.style.display = hidden ? 'block' : 'none';
+          scope.classList.toggle('open', hidden);
+        }
+        return;
+      }
+      // Dataset-Zeile: Einzel-Snapshots lazy nachladen (scope-spezifischer Cache).
+      var row = ev.target.closest('.zb-ds-row');
+      if (!row || !snapBody.contains(row)) return;
+      var detail = row.nextElementSibling;
+      if (!detail || !detail.classList.contains('zb-ds-detail')) return;
+      if (detail.style.display !== 'none') {           // offen -> zuklappen
+        detail.style.display = 'none'; row.classList.remove('open'); return;
+      }
+      detail.style.display = 'table-row';
+      row.classList.add('open');
+      if (detail.dataset.loaded !== '1') {
+        var cell = detail.querySelector('td');
+        cell.innerHTML = '<p class="muted" style="margin:0">Lade Snapshots …</p>';
+        fetch('/plugins/zfs-backup/include/dataset-snapshots.php?ds=' + encodeURIComponent(row.dataset.ds)
+              + '&scope=' + encodeURIComponent(row.dataset.scope || 'source'))
+          .then(function(r){ return r.json(); })
+          .then(function(d){ detail.dataset.loaded = '1'; cell.innerHTML = zbRenderSnaps(d); })
+          .catch(function(e){ cell.innerHTML = '<div class="zb-error">Fehler: ' + e + '</div>'; });
+      }
+    });
+  }
+
+  // ---- Datei-Browser: Inhalt eines Snapshots durchblättern (lazy je Ebene) ----
+  // Liest tatsächlich ins Dataset (.zfs/snapshot) – weckt ggf. Platte/Remote.
+  // Klick auf „Inhalt …" öffnet das Modal; Ordner navigieren, Datei = Vorschau
+  // (Text, ≤256 KB) bzw. Download.
+  var FB_BROWSE = '/plugins/zfs-backup/include/snapshot-browse.php';
+  var FB_FILE   = '/plugins/zfs-backup/include/snapshot-file.php';
+  var fbBox   = document.getElementById('zb-fb');
+  var fbTitle = document.getElementById('zb-fb-title');
+  var fbCrumb = document.getElementById('zb-fb-crumbs');
+  var fbBody  = document.getElementById('zb-fb-body');
+  var fb = { scope:'source', ds:'', snap:'', path:'' };
+
+  function fbUrl(base, extra){
+    var u = base + '?ds=' + encodeURIComponent(fb.ds)
+          + '&snap=' + encodeURIComponent(fb.snap)
+          + '&scope=' + encodeURIComponent(fb.scope);
+    return u + (extra || '');
+  }
+  function fbClose(){ if (fbBox) fbBox.style.display = 'none'; }
+  // Scope für den Browser-Titel: "(Quelle)" bzw. "auf <Ziel-Label> (#<id>)"
+  // (gleiches Label-Format wie der Ziel-Picker bei den verwaisten Datasets).
+  function fbScopeTitle(scope){
+    if (scope === 'source' || !scope) return '(Quelle)';
+    var t = null;
+    for (var i = 0; i < ZB_TARGETS.length; i++) {
+      if (ZB_TARGETS[i].id === String(scope)) { t = ZB_TARGETS[i]; break; }
+    }
+    return 'auf ' + (t ? t.label : ('#' + scope)) + ' (#' + (t ? t.id : scope) + ')';
+  }
+  function fbOpen(scope, ds, snap){
+    fb = { scope: scope || 'source', ds: ds || '', snap: snap || '', path: '' };
+    if (fbTitle) fbTitle.textContent = snap + '  ' + fbScopeTitle(scope);
+    if (fbBox) fbBox.style.display = 'flex';
+    fbLoad('');
+  }
+  function fbRenderCrumbs(){
+    if (!fbCrumb) return;
+    var parts = fb.path ? fb.path.split('/') : [];
+    var html = '<a href="#" data-fb-path="">/ (Wurzel)</a>', acc = '';
+    parts.forEach(function(p){
+      acc = acc ? acc + '/' + p : p;
+      html += ' <span class="zb-fb-sep">›</span> <a href="#" data-fb-path="' + zbEsc(acc) + '">' + zbEsc(p) + '</a>';
+    });
+    // Aktuelle Ebene komplett zurückholen: an der Wurzel der GANZE Snapshot,
+    // sonst der gerade geöffnete Ordner (data-fb-restore mit dem aktuellen Pfad).
+    var rlabel = fb.path ? '↩ Diesen Ordner wiederherstellen' : '↩ Ganzen Snapshot wiederherstellen';
+    html += ' <a href="#" class="zb-fb-restore" data-fb-restore="' + zbEsc(fb.path)
+          + '" style="margin-left:auto" title="In den Restore-Ordner des Quell-Datasets zurückholen">' + rlabel + '</a>';
+    fbCrumb.innerHTML = html;
+  }
+  function fbLoad(path){
+    fb.path = path || '';
+    fbRenderCrumbs();
+    if (fbBody) fbBody.innerHTML = '<p class="muted" style="margin:0">Lade … (greift auf die Platte zu; schläft der Remote, wird er geweckt – das kann bis zu einer Minute dauern)</p>';
+    fetch(fbUrl(FB_BROWSE, '&path=' + encodeURIComponent(fb.path)))
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if (!d || d.error) { fbBody.innerHTML = '<div class="zb-error">' + zbEsc((d && d.error) || 'Nicht lesbar') + '</div>'; return; }
+        fbBody.innerHTML = fbRenderList(d.entries || []);
+      })
+      .catch(function(e){ fbBody.innerHTML = '<div class="zb-error">Fehler: ' + e + '</div>'; });
+  }
+  function fbRenderList(entries){
+    // Verzeichnisse zuerst, dann Dateien; je alphabetisch.
+    entries.sort(function(a,b){
+      var ad = (a.type === 'dir') ? 0 : 1, bd = (b.type === 'dir') ? 0 : 1;
+      if (ad !== bd) return ad - bd;
+      return String(a.name).localeCompare(String(b.name));
+    });
+    if (!entries.length) return '<p class="muted" style="margin:0">Leeres Verzeichnis.</p>';
+    // Restore aus Quelle UND Replikaten (lokal/remote) – landet immer im
+    // _restore-Ordner des Quell-Datasets.
+    var canRestore = true;
+    var h = '<table class="zb-fb-tbl"><tbody>';
+    entries.forEach(function(x){
+      var isDir = (x.type === 'dir');
+      var icon  = isDir ? '📁' : (x.type === 'link' ? '🔗' : '📄');
+      var rel   = fb.path ? fb.path + '/' + x.name : x.name;
+      var nameCell = isDir
+        ? '<a href="#" class="zb-fb-dir" data-fb-path="' + zbEsc(rel) + '">' + zbEsc(x.name) + '</a>'
+        : '<a href="#" class="zb-fb-file" data-fb-file="' + zbEsc(rel) + '" data-fb-size="' + (x.size||0) + '">' + zbEsc(x.name) + '</a>';
+      var actCell = canRestore
+        ? '<td class="zb-fb-act"><a href="#" class="zb-fb-restore" data-fb-restore="' + zbEsc(rel)
+          + '" title="In den Restore-Ordner zurückholen">↩ Wiederherstellen</a></td>'
+        : '<td></td>';
+      h += '<tr><td class="zb-fb-ic">' + icon + '</td><td class="zb-fb-nm">' + nameCell
+         + '</td><td class="num">' + (isDir ? '' : zbBytes(x.size)) + '</td>'
+         + '<td class="zb-fb-dt">' + zbEsc(x.modified) + '</td>' + actCell + '</tr>';
+    });
+    return h + '</tbody></table>';
+  }
+  var FB_PREVIEW_MAX = 256 * 1024;
+  function fbShowFile(rel, size){
+    var dl = fbUrl(FB_FILE, '&path=' + encodeURIComponent(rel));
+    var name = rel.split('/').pop();
+    var restoreLink = ' <a href="#" class="zb-fb-restore" data-fb-restore="' + zbEsc(rel) + '">↩ Wiederherstellen</a>';
+    var head = '<div class="zb-fb-fhead"><a href="#" class="zb-fb-back" data-fb-path="' + zbEsc(fb.path) + '">‹ Zurück</a>'
+             + ' <span class="mono">' + zbEsc(name) + '</span> <span class="muted">' + zbBytes(size) + '</span>'
+             + restoreLink
+             + ' <a class="zb-fb-dl" href="' + dl + '" download>Herunterladen</a></div>';
+    if (size > FB_PREVIEW_MAX) {
+      fbBody.innerHTML = head + '<p class="muted">Datei zu groß für die Vorschau – bitte herunterladen.</p>';
+      return;
+    }
+    fbBody.innerHTML = head + '<p class="muted" style="margin:0">Lade Vorschau …</p>';
+    fetch(fbUrl(FB_FILE, '&mode=preview&path=' + encodeURIComponent(rel)))
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        var note = '';
+        if (d && d.binary) { fbBody.innerHTML = head + '<p class="muted">Binärdatei – keine Textvorschau. Bitte herunterladen.</p>'; return; }
+        if (d && d.truncated) note = '<p class="muted" style="margin:0 0 6px">Gekürzt auf 256 KB …</p>';
+        var txt = (d && d.text) || '';
+        fbBody.innerHTML = head + note + '<pre class="zb-fb-prev">' + zbEsc(txt) + '</pre>';
+      })
+      .catch(function(e){ fbBody.innerHTML = head + '<div class="zb-error">Fehler: ' + e + '</div>'; });
+  }
+
+  // Datei/Ordner aus dem Snapshot (Quelle ODER Replikat) in den _restore-Ordner
+  // des Quell-Datasets zurückholen.
+  var FB_RESTORE = '/plugins/zfs-backup/include/snapshot-restore.php';
+  function fbRestore(rel){
+    var fromRepl = (fb.scope !== 'source');
+    // Leerer Pfad = ganzer Snapshot; sonst der einzelne Eintrag/Ordner.
+    var what = rel ? '„' + rel.split('/').pop() + '"' : 'der GESAMTE Snapshot';
+    if (!confirm(what + ' aus diesem Snapshot wiederherstellen?\n\n'
+                 + 'Wird in den _restore-Ordner des Quell-Datasets kopiert '
+                 + '(_restore/' + fb.snap + '/) – überschreibt nichts.'
+                 + (fromRepl ? '\n\nHinweis: Restore aus einem Replikat – das Quell-Dataset muss dafür existieren.' : ''))) return;
+
+    // Fortschritt direkt IM Datei-Browser (fbBody) anzeigen – kein zweites
+    // Fenster. „‹ Zurück" führt über data-fb-path zurück in die aktuelle Ebene.
+    var backLink = '<a href="#" class="zb-fb-back" data-fb-path="' + zbEsc(fb.path) + '">‹ Zurück zur Liste</a>';
+    fbBody.innerHTML =
+        '<div class="zb-fb-fhead">' + backLink + '</div>'
+      + '<div class="muted" style="margin:0 0 8px">' + zbEsc(what)
+      + ' wird zurückgeholt … (greift auf die Platte zu; schläft der Remote, wird er geweckt).</div>'
+      + '<progress id="zb-rest-bar" max="100" value="0" style="width:100%;height:16px"></progress>'
+      + '<div id="zb-rest-pct" class="muted" style="margin-top:6px">starte …</div>';
+    var bar = function(){ return document.getElementById('zb-rest-bar'); };
+    var pct = function(){ return document.getElementById('zb-rest-pct'); };
+
+    var body = 'csrf_token=' + encodeURIComponent(zbCsrf())
+             + '&ds=' + encodeURIComponent(fb.ds)
+             + '&snap=' + encodeURIComponent(fb.snap)
+             + '&scope=' + encodeURIComponent(fb.scope)
+             + '&path=' + encodeURIComponent(rel);
+    var dest = '', exit = null, msgs = [], buf = '';
+
+    function handleLine(ln){
+      var m;
+      if ((m = ln.match(/^FORTSCHRITT (-?\d+)(?:\s+(\d+))?/))) {
+        var p = parseInt(m[1], 10), b = bar(), e = pct();
+        if (p < 0) {                       // unbestimmt: nur kopierte Bytes
+          if (b) b.removeAttribute('value');
+          if (e) e.textContent = m[2] ? (zbBytes(parseInt(m[2], 10)) + ' kopiert …') : 'läuft …';
+        } else {
+          if (b) b.value = p;
+          if (e) e.textContent = p + ' %';
+        }
+      } else if ((m = ln.match(/^ZIEL (.+)/))) {
+        dest = m[1];
+      } else if ((m = ln.match(/^\[Exit-Code: (\d+)\]/))) {
+        exit = parseInt(m[1], 10);
+      } else if (ln.trim() !== '') {
+        msgs.push(ln);                     // FEHLER/Hinweis-Zeilen für den Fehlerfall
+      }
+    }
+
+    fetch(FB_RESTORE, { method:'POST',
+        headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: body })
+      .then(function(resp){
+        if (!resp.body || !resp.body.getReader) {       // Fallback ohne Streaming
+          return resp.text().then(function(t){ t.split('\n').forEach(handleLine); });
+        }
+        var reader = resp.body.getReader(), dec = new TextDecoder();
+        return (function pump(){ return reader.read().then(function(res){
+          if (res.done) { if (buf) handleLine(buf); return; }
+          buf += dec.decode(res.value, { stream:true });
+          var lines = buf.split('\n'); buf = lines.pop();
+          lines.forEach(handleLine);
+          return pump();
+        }); })();
+      })
+      .then(function(){
+        var ok = (exit === 0) && dest !== '';
+        if (ok) {
+          fbBody.innerHTML = '<div class="zb-fb-fhead">' + backLink + '</div>'
+            + '<div style="margin:0 0 6px;color:#1B7A4B;font-weight:600">✓ Wiederhergestellt nach:</div>'
+            + '<pre style="margin:0;white-space:pre-wrap">' + zbEsc(dest) + '</pre>';
+          snapLoaded = false;             // Bestand kann sich geändert haben
+        } else {
+          fbBody.innerHTML = '<div class="zb-fb-fhead">' + backLink + '</div>'
+            + '<div class="zb-error" style="margin:0 0 6px">Fehler beim Wiederherstellen:</div>'
+            + '<pre style="margin:0;white-space:pre-wrap">' + zbEsc(msgs.join('\n') || 'unbekannt') + '</pre>';
+        }
+      })
+      .catch(function(err){
+        fbBody.innerHTML = '<div class="zb-fb-fhead">' + backLink + '</div>'
+          + '<div class="zb-error">Fehler: ' + zbEsc(String(err)) + '</div>';
+      });
+  }
+
+  if (fbBox) {
+    document.getElementById('zb-fb-close').addEventListener('click', fbClose);
+    fbBox.addEventListener('click', function(ev){
+      if (ev.target === fbBox) { fbClose(); return; }   // Klick auf Overlay schließt
+      var rest = ev.target.closest('[data-fb-restore]');
+      if (rest) { ev.preventDefault(); fbRestore(rest.getAttribute('data-fb-restore')); return; }
+      var nav = ev.target.closest('[data-fb-path]');
+      if (nav) { ev.preventDefault(); fbLoad(nav.getAttribute('data-fb-path')); return; }
+      var file = ev.target.closest('[data-fb-file]');
+      if (file) { ev.preventDefault(); fbShowFile(file.getAttribute('data-fb-file'), parseInt(file.getAttribute('data-fb-size'), 10) || 0); return; }
+    });
+  }
+  // „Inhalt …"-Knopf in den aufgeklappten Snapshot-Zeilen (Delegation, da lazy).
+  if (snapBody) {
+    snapBody.addEventListener('click', function(ev){
+      var btn = ev.target.closest('.zb-fb-open');
+      if (!btn || !snapBody.contains(btn)) return;
+      ev.preventDefault();
+      fbOpen(btn.getAttribute('data-scope'), btn.getAttribute('data-ds'), btn.getAttribute('data-snap'));
+    });
+  }
+
+  // ---- Logs-Tab: Startzeilen laden + live folgen (Push/SSE) -------------
+  // Erst die letzten N Zeilen (logs.php), dann per SSE jede NEUE Zeile live
+  // anhängen (mode=lines, Start 0 -> keine Doppelung mit dem geladenen Tail).
+  var logBody   = document.getElementById('zb-log-body');
+  var logSel    = document.getElementById('zb-log-n');
+  var logFilter = document.getElementById('zb-log-filter');
+  var logCount  = document.getElementById('zb-log-count');
+  var logES     = null;
+  var logLines  = [];     // vollständiger Puffer (Tail + live), Filter nur Sicht
+  var logQuery  = '';     // aktueller Filter (lowercase)
+
+  function logAtBottom(){
+    return logBody && (logBody.scrollHeight - logBody.scrollTop - logBody.clientHeight) < 8;
+  }
+  function logMatches(line){ return !logQuery || line.toLowerCase().indexOf(logQuery) !== -1; }
+  function logUpdateCount(shown){
+    if (!logCount) return;
+    logCount.textContent = logQuery ? (shown + ' / ' + logLines.length + ' Zeilen') : '';
+  }
+  // Komplett aus dem Puffer neu rendern (bei Filteränderung / Neuladen).
+  function logRender(){
+    if (!logBody) return;
+    var atEnd = logAtBottom();
+    var shown = logQuery ? logLines.filter(logMatches) : logLines;
+    logBody.textContent = shown.join('\n');
+    logUpdateCount(shown.length);
+    if (atEnd) logBody.scrollTop = logBody.scrollHeight;
+  }
+  function zbLogsStreamStop(){
+    if (logES) { logES.close(); logES = null; }
+  }
+  function zbLogsStreamStart(){
+    if (logES || !logBody || !window.EventSource) return;
+    logES = new EventSource('/plugins/zfs-backup/include/log-stream.php?mode=lines');
+    logES.addEventListener('line', function(ev){
+      var atEnd = logAtBottom();
+      logLines.push(ev.data);
+      if (logMatches(ev.data)) {                              // nur sichtbare Zeilen anhängen
+        logBody.textContent += (logBody.textContent ? '\n' : '') + ev.data;
+        if (atEnd) logBody.scrollTop = logBody.scrollHeight;  // nur mitscrollen, wenn schon unten
+      }
+      if (logQuery) logUpdateCount(logBody.textContent ? logBody.textContent.split('\n').length : 0);
+    });
+  }
+  // Tail (neu) laden, danach live weiterfolgen.
+  function zbLogsLoad(){
+    if (!logBody) return;
+    zbLogsStreamStop();
+    logBody.textContent = 'Wird geladen …';
+    var n = logSel ? logSel.value : 200;
+    fetch('/plugins/zfs-backup/include/logs.php?n=' + encodeURIComponent(n))
+      .then(function(r){ return r.text(); })
+      .then(function(txt){ logLines = txt.split('\n'); logRender(); logBody.scrollTop = logBody.scrollHeight; zbLogsStreamStart(); })
+      .catch(function(e){ logBody.textContent = 'Fehler beim Laden: ' + e; });
+  }
+  var logReload = document.getElementById('zb-log-reload');
+  if (logReload) logReload.addEventListener('click', function(){ zbLogsLoad(); });
+  if (logSel)    logSel.addEventListener('change', function(){ zbLogsLoad(); });
+  if (logFilter) logFilter.addEventListener('input', function(){
+    logQuery = this.value.trim().toLowerCase();
+    logRender();
+  });
+
+  // ---- Status-Live-Stream (SSE) + „Lauf starten" -----------------------
+  // Die Box #zb-prog ist immer im DOM (versteckt, wenn nichts läuft). Bei
+  // aktivem Lauf wird der SSE-Status-Stream abonniert – beides Push: `line`
+  // (Logzeile, tail-Kanal) und `status` (Phase/Detail, progress-follow-Kanal);
+  // „done" => Lauf beendet -> einmal neu laden. run.php blockiert NICHT mehr:
+  // nach dem Start wird die Box sofort eingeblendet und der Stream mit
+  // expect=starting geöffnet, der auf den Hochlauf wartet.
+  var progEl   = document.getElementById('zb-prog');
+  var elPhase  = document.getElementById('zb-prog-phase');
+  var elPid    = document.getElementById('zb-prog-pid');
+  var elMeta   = document.getElementById('zb-prog-meta');
+  var elLog    = document.getElementById('zb-prog-log');    // letzte Logzeile (Push)
+  var elDetail = document.getElementById('zb-prog-detail'); // Unterschritt/Prozent
+  var elSince  = document.getElementById('zb-prog-since');  // „läuft seit …"
+  var runBtn   = document.getElementById('zb-run-btn');
+  var badgeEl  = document.getElementById('zb-badge');
+  var statusES = null;
+  var statusActive = false;        // soll der Status-Stream offen sein?
+
+  // Lauf erkannt (über den Watch-Stream): Fortschrittsbox zeigen, „Lauf starten"
+  // ausblenden, Badge auf „läuft". Greift auch bei extern (Cron/CLI) gestarteten
+  // Läufen, ohne dass der Browser pollt.
+  function zbShowRunning(){
+    if (progEl) { progEl.dataset.running = '1'; progEl.style.display = ''; }
+    if (runBtn) runBtn.style.display = 'none';
+    if (badgeEl) { badgeEl.textContent = 'läuft'; badgeEl.className = 'zb-badge run'; }
+    var warn = document.querySelector('.zb-warn');   // „veraltet"-Banner während des Laufs ausblenden
+    if (warn) warn.style.display = 'none';
+  }
+
+  // lastChange = wann sich zuletzt etwas geändert hat (Logzeile ODER Detail).
+  // Treibt den „läuft seit"-Ticker, der echten Stillstand sichtbar macht, ohne
+  // dass eine lange Einzeloperation wie ein Hänger wirkt.
+  var lastChange = Date.now();
+  function zbBump(){ lastChange = Date.now(); }
+  function zbPad(n){ return (n < 10 ? '0' : '') + n; }
+  function zbTick(){
+    if (!elSince) return;
+    if (!statusActive) { elSince.textContent = ''; return; }
+    var s = Math.floor((Date.now() - lastChange) / 1000);
+    // Erst ab ein paar Sekunden Stillstand anzeigen – bei aktiver Bewegung leer.
+    elSince.textContent = (s >= 4) ? ('· läuft seit ' + Math.floor(s/60) + ':' + zbPad(s%60)) : '';
+  }
+  setInterval(zbTick, 1000);
+
+  function onStatusTab(){ return location.hash === '' || location.hash === '#status'; }
+
+  function zbStatusStop(){ if (statusES) { statusES.close(); statusES = null; } }
+
+  function zbStatusStart(expectStarting){
+    statusActive = true;
+    // Im Hintergrund-Tab keinen Worker halten – wird bei Sichtbarkeit reaktiviert.
+    if (statusES || !window.EventSource || document.hidden) return;
+    lastChange = Date.now();    // Ticker frisch starten (auch nach Tab-Rückkehr)
+    var url = '/plugins/zfs-backup/include/log-stream.php?mode=status'
+            + (expectStarting ? '&expect=starting' : '');
+    statusES = new EventSource(url);
+    statusES.addEventListener('line', function(ev){
+      // Logzeile kommt sofort (Push, eigener tail-Kanal).
+      if (elLog && ev.data !== elLog.textContent) { elLog.textContent = ev.data; zbBump(); }
+    });
+    statusES.addEventListener('status', function(ev){
+      var s; try { s = JSON.parse(ev.data); } catch(e){ return; }
+      zbShowRunning();   // ein Status-Event heißt: es läuft gerade
+      if (elPhase) elPhase.textContent = s.phase || '';
+      if (elPid)   elPid.textContent   = s.pid ? ('(PID ' + s.pid + ')') : '';
+      if (elMeta)  elMeta.textContent  = 'gestartet ' + (s.started || '') + ' · aktualisiert ' + (s.updated || '');
+      var d = s.detail || '';
+      if (elDetail && d !== elDetail.textContent) { elDetail.textContent = d; zbBump(); }
+    });
+    statusES.addEventListener('done', function(){
+      zbStatusStop();
+      statusActive = false;
+      if (onStatusTab()) location.reload();   // Lauf fertig -> Ergebnis-Karten frisch
+    });
+    statusES.addEventListener('notrunning', function(){
+      // Reconnect (z. B. nach Tab-Rückkehr): kein Lauf aktiv. Zeigten wir noch
+      // „läuft", ist er in der Zwischenzeit fertig geworden -> neu laden. Sonst
+      // (leerlaufende Statusseite) ignorieren und auf den nächsten Lauf warten.
+      if (progEl && progEl.dataset.running === '1' && onStatusTab()) location.reload();
+    });
+  }
+
+  // Der Status-Watch wird über activate(tabFromHash()) weiter unten gestartet
+  // (sobald der Status-Tab aktiv ist) – er erkennt einen laufenden ODER einen
+  // gleich startenden Lauf. Kein Sonderfall fürs Laden nötig.
+
+  if (runBtn) {
+    runBtn.addEventListener('click', function(){
+      var msg = document.getElementById('zb-run-msg');
+      if (!confirm('Jetzt einen Backup-Lauf starten?')) return;
+      runBtn.disabled = true;
+      if (msg) { msg.className = 'zb-savemsg'; msg.textContent = 'Wird gestartet …'; }
+      zbPost('/plugins/zfs-backup/include/run.php', {}).then(function(r){
+        if (r.data && r.data.ok) {
+          if (msg) msg.textContent = '';
+          runBtn.style.display = 'none';
+          if (progEl) {
+            progEl.style.display = '';
+            if (elPhase) elPhase.textContent = 'startet …';
+            if (elMeta)  elMeta.textContent  = '';
+            if (elPid)   elPid.textContent   = '';
+            if (elLog)    elLog.textContent    = 'Lauf wird gestartet …';
+            if (elDetail) elDetail.textContent = '';
+          }
+          lastChange = Date.now();
+          zbStatusStart(true);                  // wartet auf den Hochlauf
+        } else {
+          runBtn.disabled = false;
+          if (msg) { msg.className = 'zb-savemsg err';
+            msg.textContent = (r.data && (r.data.msg || r.data.error)) || 'Start fehlgeschlagen.'; }
+        }
+      });
+    });
+  }
+
+  // „Simulieren" (Dry-Run): zeigt, was ein Lauf täte, ohne etwas zu ändern.
+  // Streamt --simulate (read-only) ins Modal – gleiches Muster wie Wartung/Test.
+  var simBtn = document.getElementById('zb-sim-btn');
+  if (simBtn) {
+    simBtn.addEventListener('click', function(){
+      simBtn.disabled = true;
+      var body = 'csrf_token=' + encodeURIComponent(zbCsrf()) + '&action=simulate';
+      zbStream('/plugins/zfs-backup/include/maintenance.php', body,
+               'Simulation (Dry-Run)', 'Simuliere …\n\n').then(function(text){
+        simBtn.disabled = false;
+        zbModalStatus(/\[Exit-Code: 0\]/.test(text));
+      }).catch(function(e){
+        simBtn.disabled = false;
+        zbModalBody('Fehler: ' + e);
+        zbModalStatus(false);
+      });
+    });
+  }
+
+  // ---- Zeitplan-Tab (Cron) ---------------------------------------------
+  var SCHED_URL  = '/plugins/zfs-backup/include/schedule.php';
+  var schEnabled = document.getElementById('sch-enabled');
+  var schFreq    = document.getElementById('sch-freq');
+  var schHour    = document.getElementById('sch-hour');
+  var schMinute  = document.getElementById('sch-minute');
+  var schDow     = document.getElementById('sch-dow');
+  var schMin     = document.getElementById('sch-min');
+  var schCron    = document.getElementById('sch-cron');
+  var schState   = document.getElementById('zb-sch-state');
+  var schSave    = document.getElementById('zb-sch-save');
+  var schMsg     = document.getElementById('zb-sch-msg');
+  var schLoaded  = false;
+
+  function schIsNum(s){ return /^\d+$/.test(s); }
+
+  // Aus den Preset-Feldern den Cron-Ausdruck berechnen (custom: Feld bleibt frei).
+  function schComputeCron(){
+    if (!schFreq || schFreq.value === 'custom') return;
+    var hh = schHour   ? (parseInt(schHour.value, 10)   || 0) : 0;
+    var mm = schMinute ? (parseInt(schMinute.value, 10) || 0) : 0;
+    var expr = '';
+    if (schFreq.value === 'hourly')      expr = (parseInt(schMin.value, 10) || 0) + ' * * * *';
+    else if (schFreq.value === 'daily')  expr = mm + ' ' + hh + ' * * *';
+    else if (schFreq.value === 'weekly') expr = mm + ' ' + hh + ' * * ' + (schDow ? schDow.value : '1');
+    if (schCron) schCron.value = expr;
+  }
+  // Felder je nach Häufigkeit aktivieren + Cron read-only/editierbar.
+  function schSyncFields(){
+    if (!schFreq) return;
+    var f = schFreq.value;
+    var useTime = (f === 'daily' || f === 'weekly');
+    if (schHour)   schHour.disabled   = !useTime;
+    if (schMinute) schMinute.disabled = !useTime;
+    if (schDow)    schDow.disabled    = (f !== 'weekly');
+    if (schMin)    schMin.disabled    = (f !== 'hourly');
+    if (schCron)   schCron.readOnly   = (f !== 'custom');
+    schComputeCron();
+  }
+  // Gespeicherten Cron-Ausdruck in die Preset-Felder zurücklesen.
+  function schSetTime(h, m){
+    if (schHour)   schHour.value   = String(parseInt(h, 10) || 0);
+    if (schMinute) schMinute.value = String(parseInt(m, 10) || 0);
+  }
+  function schParseCron(expr){
+    var p = (expr || '').trim().split(/\s+/);
+    if (p.length !== 5) { schFreq.value = 'custom'; schCron.value = expr || ''; return; }
+    var m = p[0], h = p[1], dom = p[2], mon = p[3], dow = p[4];
+    if (dom === '*' && mon === '*' && dow === '*' && h === '*' && schIsNum(m)) {
+      schFreq.value = 'hourly'; schMin.value = String(parseInt(m, 10) || 0);
+    } else if (dom === '*' && mon === '*' && dow === '*' && schIsNum(h) && schIsNum(m)) {
+      schFreq.value = 'daily';  schSetTime(h, m);
+    } else if (dom === '*' && mon === '*' && schIsNum(dow) && schIsNum(h) && schIsNum(m)) {
+      schFreq.value = 'weekly'; schSetTime(h, m); schDow.value = dow;
+    } else {
+      schFreq.value = 'custom'; schCron.value = expr;
+    }
+  }
+  function schRenderState(d){
+    if (!schState) return;
+    schState.textContent = (d && d.enabled && d.cron)
+      ? 'Aktiv – geplant nach Cron „' + d.cron + '".'
+      : 'Kein Zeitplan aktiv – Läufe nur manuell oder extern.';
+  }
+  function zbSchedLoad(){
+    if (schLoaded || !schFreq) return;
+    schLoaded = true;
+    fetch(SCHED_URL, {headers:{'Accept':'application/json'}})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        schEnabled.value = (d && d.enabled) ? 'yes' : 'no';
+        schParseCron(d && d.cron ? d.cron : '0 2 * * *');
+        schSyncFields();
+        schRenderState(d);
+      })
+      .catch(function(){ schLoaded = false;
+        if (schState) schState.textContent = 'Zeitplan konnte nicht geladen werden.'; });
+  }
+  if (schFreq) {
+    schFreq.addEventListener('change', schSyncFields);
+    if (schHour)   schHour.addEventListener('change',   schComputeCron);
+    if (schMinute) schMinute.addEventListener('change', schComputeCron);
+    if (schDow)    schDow.addEventListener('change',    schComputeCron);
+    if (schMin)    schMin.addEventListener('change',    schComputeCron);
+  }
+  if (schSave) {
+    schSave.addEventListener('click', function(){
+      schComputeCron();
+      var enabled = (schEnabled && schEnabled.value === 'yes') ? 'yes' : 'no';
+      var cron    = ((schCron && schCron.value) || '').trim();
+      schMsg.className = 'zb-savemsg'; schMsg.textContent = 'Speichere …';
+      schSave.disabled = true;
+      var body = 'csrf_token=' + encodeURIComponent(zbCsrf()) +
+                 '&enabled=' + encodeURIComponent(enabled) +
+                 '&cron=' + encodeURIComponent(cron);
+      fetch(SCHED_URL, {method:'POST',
+        headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: body})
+        .then(function(r){ return r.text(); })
+        .then(function(text){
+          schSave.disabled = false;
+          var d; try { d = JSON.parse(text); }
+          catch(e){ schMsg.className='zb-savemsg err'; schMsg.textContent='Unerwartete Antwort.'; return; }
+          if (d.ok) {
+            schMsg.className='zb-savemsg'; schMsg.textContent='Gespeichert.';
+            schLoaded = false; zbSchedLoad();
+          } else {
+            schMsg.className='zb-savemsg err'; schMsg.textContent = d.msg || 'Fehler beim Speichern.';
+          }
+        })
+        .catch(function(e){ schSave.disabled=false;
+          schMsg.className='zb-savemsg err'; schMsg.textContent='Fehler: ' + e; });
+    });
+  }
+
+  // Im Hintergrund-Tab keine SSE-Verbindung offen halten (spart php-fpm-Worker,
+  // gerade bei mehreren Tabs/Geräten); bei Rückkehr wieder aufnehmen.
+  document.addEventListener('visibilitychange', function(){
+    if (document.hidden) {
+      zbStatusStop();
+      zbLogsStreamStop();
+    } else {
+      if (statusActive) zbStatusStart(false);
+      var lp = document.querySelector('.zb-panel[data-panel="logs"]');
+      if (lp && lp.classList.contains('active')) zbLogsLoad();
+    }
+  });
+
+  // ---- Tabs -------------------------------------------------------------
+  var tabs   = document.querySelectorAll('.zb-tab');
+  var panels = document.querySelectorAll('.zb-panel');
+  function activate(name){
+    tabs.forEach(function(t){ t.classList.toggle('active', t.dataset.tab === name); });
+    panels.forEach(function(p){ p.classList.toggle('active', p.dataset.panel === name); });
+    if (name === 'snapshots') zbLoadSnapshots(false);
+    if (name === 'schedule')  zbSchedLoad();
+    // Status-Watch nur auf dem Status-Tab offen halten (erkennt auch extern
+    // gestartete Läufe); beim Verlassen schließen, um keinen Worker zu binden.
+    if (name === 'status') { zbStatusStart(false); }
+    else { zbStatusStop(); statusActive = false; }
+    // Logs nur folgen, solange der Tab offen ist – beim Verlassen Stream schließen.
+    if (name === 'logs') { zbLogsLoad(); } else { zbLogsStreamStop(); }
+  }
+  tabs.forEach(function(t){
+    t.addEventListener('click', function(){
+      location.hash = (t.dataset.tab === 'status') ? '' : t.dataset.tab;
+      activate(t.dataset.tab);
+    });
+  });
+  function tabFromHash(){
+    var h = location.hash.replace('#','');
+    return ['config','targets','snapshots','schedule','wartung','logs'].indexOf(h) >= 0 ? h : 'status';
+  }
+  activate(tabFromHash());
+  // Hash-Wechsel (z. B. Link „#snapshots" aus dem Status-Tab, Browser-Zurück).
+  window.addEventListener('hashchange', function(){ activate(tabFromHash()); });
+
+  // ---- Konfiguration speichern -----------------------------------------
+  // Falls das gerenderte Markdown ein <form> enthält: Enter soll die Seite
+  // nicht neu laden (Speichern läuft per AJAX).
+  var cfgForm = document.querySelector('#zb-config-form form');
+  if (cfgForm) cfgForm.addEventListener('submit', function(e){ e.preventDefault(); });
+
+  var saveBtn = document.getElementById('zb-save-btn');
+  if (saveBtn) {
+    saveBtn.addEventListener('click', function(){
+      var inputs = document.querySelectorAll('#zb-config-form [data-name]');
+      var fields = {};
+      var changed = 0;
+
+      inputs.forEach(function(el){
+        // Feldmeldung zurücksetzen: das Feld sitzt im markdown-dd, die .fieldmsg
+        // im selben dd (beim Array-Feld liegt das Hidden-Input zusätzlich in .zb-list).
+        var fm = (el.closest('dd') || el.parentNode).querySelector('.fieldmsg');
+        if (fm) { fm.textContent=''; fm.className='fieldmsg'; }
+
+        var val  = el.value;
+        var orig = el.dataset.orig;
+        if (el.dataset.type === 'secret') {
+          // Secrets nur senden, wenn etwas eingegeben wurde.
+          if (val === '') return;
+        } else {
+          if (val === orig) return;            // unverändert -> nicht senden
+          if (el.dataset.type === 'array' && val.trim() === '') {
+            val = '-';                          // leeres Array -> Skript-Konvention
+          }
+        }
+        fields[el.dataset.name] = val;
+        changed++;
+      });
+
+      var msg = document.getElementById('zb-save-msg');
+      if (changed === 0) { msg.className='zb-savemsg'; msg.textContent='Keine Änderungen.'; return; }
+
+      msg.className='zb-savemsg'; msg.textContent='Speichere …';
+      saveBtn.disabled = true;
+
+      var body = 'csrf_token=' + encodeURIComponent(zbCsrf());
+      Object.keys(fields).forEach(function(k){
+        body += '&fields[' + encodeURIComponent(k) + ']=' + encodeURIComponent(fields[k]);
+      });
+
+      var httpStatus = 0;
+      fetch('/plugins/zfs-backup/include/save.php', {
+        method:'POST',
+        headers:{'Content-Type':'application/x-www-form-urlencoded'},
+        body: body
+      })
+      .then(function(r){ httpStatus = r.status; return r.text(); })
+      .then(function(text){
+        saveBtn.disabled = false;
+        var data;
+        try { data = JSON.parse(text); }
+        catch (e) {
+          // Keine JSON-Antwort -> Status + Auszug zeigen (z. B. 403/404/Login-HTML).
+          msg.className='zb-savemsg err';
+          msg.textContent = 'Unerwartete Antwort (HTTP ' + httpStatus + '): ' +
+                            text.replace(/\s+/g,' ').slice(0,160);
+          return;
+        }
+        if (data && data.error) {
+          msg.className='zb-savemsg err';
+          msg.textContent = 'Abgelehnt (HTTP ' + httpStatus + '): ' + data.error;
+          return;
+        }
+        var res = (data && data.results) || {};
+        var okCount = 0, errCount = 0;
+        Object.keys(res).forEach(function(name){
+          var el = document.querySelector('#zb-config-form [data-name="'+name+'"]');
+          var fm = el ? (el.closest('dd') || el.parentNode).querySelector('.fieldmsg') : null;
+          if (res[name].ok) {
+            okCount++;
+            if (el && el.dataset.type !== 'secret') el.dataset.orig = el.value;
+            if (fm) { fm.className='fieldmsg ok'; fm.textContent='gespeichert'; }
+          } else {
+            errCount++;
+            if (fm) { fm.className='fieldmsg err'; fm.textContent = res[name].msg || 'Fehler'; }
+          }
+        });
+        if (errCount === 0) { msg.className='zb-savemsg ok';  msg.textContent = okCount + ' gespeichert.'; }
+        else                { msg.className='zb-savemsg err'; msg.textContent = okCount + ' gespeichert, ' + errCount + ' fehlgeschlagen.'; }
+      })
+      .catch(function(e){
+        saveBtn.disabled = false;
+        msg.className='zb-savemsg err'; msg.textContent = 'Fehler beim Speichern: ' + e;
+      });
+    });
+  }
+
+  // ---- Ziele -----------------------------------------------------------
+  var TG_URL = '/plugins/zfs-backup/include/targets.php';
+
+  function rowMsg(tr, ok, text){
+    var m = tr.querySelector('.rowmsg');
+    if (!m) return;
+    m.className = 'rowmsg ' + (ok ? 'ok' : 'err');
+    m.textContent = text;
+  }
+
+  // SSH-Optionen sind fix; einstellbar ist nur die Schlüsseldatei. IdentitiesOnly
+  // gehört zur festen Basis (eine ZFS-Replikation läuft ohnehin per Key-Auth, und
+  // IdentitiesOnly ergibt nur mit gesetztem -i Sinn). sshKeyOf zieht den vorhandenen
+  // -i-Pfad aus SSH_OPTIONS (zum Vorbefüllen), sshCompose hängt nur noch den
+  // Schlüssel an.
+  var SSH_FIXED = '-o BatchMode=yes -o ConnectTimeout=10 -o UpdateHostKeys=no -o IdentitiesOnly=yes';
+  function sshKeyOf(opts){
+    var toks = (opts || '').trim().split(/\s+/);
+    for (var i = 0; i < toks.length; i++){
+      if (toks[i] === '-i' && i + 1 < toks.length) return toks[i + 1];
+    }
+    return '';
+  }
+  function sshCompose(key){
+    key = (key || '').trim();
+    return key ? SSH_FIXED + ' -i ' + key : SSH_FIXED;
+  }
+  // Originalwert gleich normalisieren, damit reines Öffnen+Speichern ohne echte
+  // Änderung NICHT als Änderung zählt.
+  function sshOrig(er){
+    return sshCompose(sshKeyOf(er.getAttribute('data-orig-ssh') || ''));
+  }
+
+  // Popup mit Live-Ausgabe.
+  var modal     = document.getElementById('zb-modal');
+  var modalBody = document.getElementById('zb-modal-body');
+  function zbModalOpen(title){
+    if (!modal) return;
+    document.getElementById('zb-modal-title').textContent = title;
+    modal.querySelector('.zb-modal-head').className = 'zb-modal-head';
+    modalBody.textContent = '';
+    modal.style.display = 'flex';
+  }
+  function zbModalBody(text){
+    if (!modalBody) return;
+    modalBody.textContent = text;
+    modalBody.scrollTop = modalBody.scrollHeight;   // mitlaufen
+  }
+  function zbModalStatus(ok){
+    if (modal) modal.querySelector('.zb-modal-head').className = 'zb-modal-head ' + (ok ? 'ok' : 'err');
+  }
+  // Nach manchen Aktionen (z. B. Orphan-Löschen) muss die serverseitig
+  // gerenderte Statusseite frisch geladen werden – das machen wir beim Schließen
+  // des Ergebnis-Modals, damit der Nutzer die Ausgabe vorher noch lesen kann.
+  var zbReloadOnClose = false;
+  function zbModalDismiss(){
+    if (!modal) return;
+    modal.style.display = 'none';
+    if (zbReloadOnClose) { zbReloadOnClose = false; location.reload(); }
+  }
+  if (modal) {
+    document.getElementById('zb-modal-close').addEventListener('click', zbModalDismiss);
+    modal.addEventListener('click', function(e){ if (e.target === modal) zbModalDismiss(); });
+    document.addEventListener('keydown', function(e){ if (e.key === 'Escape' && modal.style.display !== 'none') zbModalDismiss(); });
+  }
+
+  // POST an einen Endpoint und Live-Ausgabe ins Modal streamen. Liefert ein
+  // Promise mit dem gesamten Text (letzte Zeile trägt „[Exit-Code: N]").
+  function zbStream(url, body, title, startMsg){
+    zbModalOpen(title);
+    zbModalBody(startMsg || '');
+    return fetch(url, {
+      method:'POST',
+      headers:{'Content-Type':'application/x-www-form-urlencoded'},
+      body: body
+    }).then(function(resp){
+      // Live mitlesen, sofern der Browser Streams unterstützt; sonst auf
+      // einmaliges Lesen am Ende zurückfallen.
+      if (!resp.body || !resp.body.getReader) {
+        return resp.text().then(function(t){ zbModalBody(t); return t; });
+      }
+      var reader = resp.body.getReader();
+      var dec = new TextDecoder();
+      var buf = '';
+      return (function pump(){
+        return reader.read().then(function(res){
+          if (res.done) return buf;
+          buf += dec.decode(res.value, { stream:true });
+          zbModalBody(buf);
+          return pump();
+        });
+      })();
+    });
+  }
+
+  // ---- Wartung-Tab: Prüfen/Wartung -------------------------------------
+  var MT_URL = '/plugins/zfs-backup/include/maintenance.php';
+  var maintPanel = document.querySelector('[data-panel="wartung"]');
+
+  // Auswahl-Popup für die Ziel-Wahl (Verwaiste-Datasets-Aktionen).
+  var ZB_TARGETS = <?= json_encode(array_map(function($t){ return ['id' => (string)($t['id'] ?? ''), 'label' => (string)($t['label'] ?? ($t['id'] ?? '')) ]; }, is_array($targets) ? $targets : [])) ?>;
+  var pickBox   = document.getElementById('zb-pick');
+  var pickBody  = document.getElementById('zb-pick-body');
+  var pickTitle = document.getElementById('zb-pick-title');
+  function zbPickClose(){ if (pickBox) pickBox.style.display = 'none'; }
+  // Generischer Auswahl-Dialog: opts = [{label, value}]; cb(opts[i]).
+  var ZB_PICK_OPTS = [];
+  function zbPick(title, hint, opts, cb){
+    if (!pickBox) { if (opts.length) cb(opts[0]); return; }   // Fallback: erste Option
+    ZB_PICK_OPTS = opts;
+    pickTitle.textContent = title;
+    var h = hint ? '<p class="zb-pick-hint">' + zbEsc(hint) + '</p>' : '';
+    opts.forEach(function(o, i){
+      h += '<button type="button" class="zb-pick-opt" data-i="' + i + '">'
+         + zbEsc(o.label) + '</button>';
+    });
+    pickBody.innerHTML = h;
+    pickBox.style.display = 'flex';
+    pickBody.onclick = function(ev){
+      var b = ev.target.closest('.zb-pick-opt');
+      if (!b) return;
+      zbPickClose();
+      cb(ZB_PICK_OPTS[parseInt(b.getAttribute('data-i'), 10)]);
+    };
+  }
+  // Ziel-Auswahl für Orphan-Aktionen (leerer value = alle Ziele).
+  function zbOrphanPick(title, cb){
+    var opts = [{ label: 'Alle Ziele', value: '' }];
+    ZB_TARGETS.forEach(function(t){
+      opts.push({ label: t.label + ' (#' + t.id + ')', value: t.id });
+    });
+    zbPick(title, 'Für welches Ziel?', opts, function(o){ cb(o.value); });
+  }
+  if (pickBox) {
+    document.getElementById('zb-pick-close').addEventListener('click', zbPickClose);
+    pickBox.addEventListener('click', function(ev){ if (ev.target === pickBox) zbPickClose(); });
+  }
+
+  // Führt eine Wartungsaktion aus (mit ggf. Bestätigung/Tipp-Phrase). target =
+  // optionale Ziel-ID (nur Orphan-Aktionen; leer = alle Ziele).
+  function zbMaintExecute(btn, target, actOverride, titleOverride){
+    var act = actOverride || btn.dataset.act;
+    var title = titleOverride || btn.dataset.title || act;
+    if (btn.dataset.confirm && !confirm(btn.dataset.confirm)) return;
+    if (btn.dataset.phrase) {
+      var typed = prompt('Zur Bestätigung bitte „' + btn.dataset.phrase + '" eintippen:');
+      if (typed === null) return;
+      if (typed.trim() !== btn.dataset.phrase) {
+        zbModalOpen(title);
+        zbModalBody('Abgebrochen: Bestätigungstext stimmt nicht.');
+        zbModalStatus(false);
+        return;
+      }
+    }
+    btn.disabled = true;
+    var body = 'csrf_token=' + encodeURIComponent(zbCsrf()) +
+               '&action=' + encodeURIComponent(act);
+    if (target) body += '&target=' + encodeURIComponent(target);
+    zbStream(MT_URL, body, title, 'Läuft …\n\n').then(function(text){
+      btn.disabled = false;
+      var ok = /\[Exit-Code: 0\]/.test(text);
+      zbModalStatus(ok);
+      // Aktionen, die den Bestand verändern: Snapshots-Tab neu laden.
+      if (ok && (act === 'thin-history' || act === 'delete-managed-snapshots' || act === 'cleanup-orphans')) {
+        snapLoaded = false;
+      }
+      // Orphan-Löschen ändert den Status-Zähler: Seite beim Schließen neu laden.
+      if (ok && act === 'cleanup-orphans') { zbReloadOnClose = true; }
+    }).catch(function(e){
+      btn.disabled = false;
+      zbModalBody('Fehler: ' + e);
+      zbModalStatus(false);
+    });
+  }
+
+  if (maintPanel) {
+    maintPanel.addEventListener('click', function(ev){
+      var btn = ev.target.closest('.zb-act');
+      if (!btn) return;
+      var act = btn.dataset.act;
+      // Snapshots prüfen: erst Umfang im Popup wählen (alles / Quelle / je Ziel).
+      if (act === 'verify-pick') {
+        var vopts = [
+          { label: 'Alles (Quelle + alle Ziele)', act: 'verify',        target: '', title: 'Prüfen: alles' },
+          { label: 'Nur Quelle',                   act: 'verify-source', target: '', title: 'Prüfen: Quelle' }
+        ];
+        ZB_TARGETS.forEach(function(t){
+          vopts.push({ label: t.label + ' (#' + t.id + ')', act: 'verify-target',
+                       target: t.id, title: 'Prüfen: ' + t.label });
+        });
+        zbPick('Snapshots prüfen – Umfang wählen', 'Was soll geprüft werden?', vopts,
+               function(o){ zbMaintExecute(btn, o.target, o.act, o.title); });
+        return;
+      }
+      // Orphan-Aktionen: erst Ziel im Popup wählen, dann ausführen.
+      if (act === 'cleanup-orphans' || act === 'cleanup-orphans-dry') {
+        var del = (act === 'cleanup-orphans');
+        zbOrphanPick(del ? 'Verwaiste Datasets löschen – Ziel wählen'
+                         : 'Verwaiste Datasets anzeigen – Ziel wählen',
+                     function(target){ zbMaintExecute(btn, target); });
+        return;
+      }
+      zbMaintExecute(btn, null);
+    });
+  }
+
+  // „Ziel hinzufügen": Host-Zeile nur bei Remote zeigen.
+  var addType = document.getElementById('add-type');
+  var addHostRow = document.getElementById('add-host-row');
+  if (addType && addHostRow) {
+    addType.addEventListener('change', function(){
+      addHostRow.style.display = (addType.value === 'remote') ? '' : 'none';
+    });
+  }
+
+  var addBtn = document.getElementById('add-btn');
+  if (addBtn) {
+    addBtn.addEventListener('click', function(){
+      var amsg = document.getElementById('add-msg');
+      var params = {
+        action: 'add',
+        label: (document.getElementById('add-label').value || '').trim(),
+        type: document.getElementById('add-type').value,
+        base: (document.getElementById('add-base').value || '').trim(),
+        host: (document.getElementById('add-host').value || '').trim()
+      };
+      if (!params.label || !params.base) {
+        amsg.className='zb-savemsg err'; amsg.textContent='Bezeichnung und Ziel-Dataset sind erforderlich.'; return;
+      }
+      amsg.className='zb-savemsg'; amsg.textContent='Lege an …'; addBtn.disabled = true;
+      zbPost(TG_URL, params).then(function(r){
+        addBtn.disabled = false;
+        if (r.data && r.data.ok) { location.hash = 'targets'; location.reload(); }
+        else { amsg.className='zb-savemsg err'; amsg.textContent = (r.data && (r.data.msg || r.data.error)) || 'Fehler'; }
+      });
+    });
+  }
+
+  // Aktionen pro Zeile (Delegation, da Zeilen serverseitig gerendert sind).
+  // WICHTIG: nur die Ziel-Tabelle in DIESEM Panel – sonst greift querySelector
+  // die erste .zb-tg (z. B. die Kapazitäts-Tabelle auf der Status-Seite) und die
+  // Ziele-Knöpfe bekommen keine Handler.
+  var tgTable = document.querySelector('[data-panel="targets"] .zb-tg');
+  if (tgTable) {
+    tgTable.addEventListener('click', function(ev){
+      var tr = ev.target.closest('tr[data-id]');
+      if (!tr) return;
+      var id = tr.dataset.id;
+
+      if (ev.target.classList.contains('zb-test')) {
+        var btn = ev.target;
+        btn.disabled = true;
+        rowMsg(tr, true, 'Teste …');
+        var body = 'csrf_token=' + encodeURIComponent(zbCsrf()) +
+                   '&action=test&id=' + encodeURIComponent(id);
+        zbStream(TG_URL, body, 'Test: ' + id, 'Test läuft …\n\n').then(function(text){
+          btn.disabled = false;
+          var ok = /\[Exit-Code: 0\]/.test(text);
+          zbModalStatus(ok);
+          rowMsg(tr, ok, ok ? 'erreichbar' : 'nicht erreichbar');
+        }).catch(function(e){
+          btn.disabled = false;
+          zbModalBody('Fehler beim Test: ' + e);
+          zbModalStatus(false);
+          rowMsg(tr, false, 'Fehler');
+        });
+      }
+
+      if (ev.target.classList.contains('zb-del')) {
+        if (!confirm('Ziel "' + id + '" wirklich löschen?')) return;
+        ev.target.disabled = true;
+        zbPost(TG_URL, { action:'delete', id:id }).then(function(r){
+          if (r.data && r.data.ok) { location.hash = 'targets'; location.reload(); }
+          else { ev.target.disabled = false; rowMsg(tr, false, (r.data && (r.data.msg || r.data.error)) || 'Fehler'); }
+        });
+      }
+    });
+
+    // --- Editor (Bearbeiten) ------------------------------------------
+    // Schlüssel-Feld beim Öffnen aus dem vorhandenen SSH_OPTIONS vorbefüllen.
+    function sshFill(er){
+      var keyInp = er.querySelector('[data-ssh="key"]');
+      if (!keyInp) return;
+      keyInp.value = sshKeyOf(er.getAttribute('data-orig-ssh') || '');
+    }
+
+    function saveEdit(er, btn){
+      var id  = er.dataset.editId;
+      var msg = er.querySelector('.zb-edit-msg');
+      var fields = {}, changed = 0;
+
+      er.querySelectorAll('[data-field]').forEach(function(el){
+        var fm = (el.closest('dd') || el.parentNode).querySelector('.fieldmsg');
+        if (fm) { fm.textContent = ''; fm.className = 'fieldmsg'; }
+        if (el.value === el.dataset.orig) return;       // unverändert
+        fields[el.dataset.field] = el.value;
+        changed++;
+      });
+
+      // SSH_OPTIONS aus festen Optionen + Schlüssel zusammensetzen.
+      var keyInp = er.querySelector('[data-ssh="key"]');
+      if (keyInp) {
+        var fmk = (keyInp.closest('dd') || keyInp.parentNode).querySelector('.fieldmsg');
+        if (fmk) { fmk.textContent = ''; fmk.className = 'fieldmsg'; }
+        var composed = sshCompose(keyInp.value);
+        if (composed !== sshOrig(er)) {
+          fields['SSH_OPTIONS'] = composed;
+          changed++;
+        }
+      }
+
+      if (changed === 0) { msg.className = 'zb-edit-msg'; msg.textContent = 'Keine Änderungen.'; return; }
+      msg.className = 'zb-edit-msg'; msg.textContent = 'Speichere …'; btn.disabled = true;
+
+      zbPost(TG_URL, { action: 'edit', id: id }, fields).then(function(r){
+        btn.disabled = false;
+        if (r.data && r.data.error) {
+          msg.className = 'zb-edit-msg err';
+          msg.textContent = 'Abgelehnt (HTTP ' + r.status + '): ' + r.data.error;
+          return;
+        }
+        var res = (r.data && r.data.results) || {};
+        var okCount = 0, errCount = 0;
+        Object.keys(res).forEach(function(f){
+          // Fehler am passenden Feld zeigen; SSH_OPTIONS hängt am Schlüssel-Feld.
+          var el = er.querySelector('[data-field="' + f + '"]') || (f === 'SSH_OPTIONS' ? keyInp : null);
+          var fm = el ? (el.closest('dd') || el.parentNode).querySelector('.fieldmsg') : null;
+          if (res[f].ok) { okCount++; if (fm) { fm.className = 'fieldmsg ok'; fm.textContent = 'gespeichert'; } }
+          else { errCount++; if (fm) { fm.className = 'fieldmsg err'; fm.textContent = res[f].msg || 'Fehler'; } }
+        });
+        if (errCount === 0) { location.hash = 'targets'; location.reload(); }
+        else { msg.className = 'zb-edit-msg err'; msg.textContent = okCount + ' gespeichert, ' + errCount + ' fehlgeschlagen.'; }
+      });
+    }
+
+    tgTable.addEventListener('click', function(ev){
+      var t = ev.target;
+
+      // Öffnen/Schließen über den Zeilen-Button.
+      if (t.classList.contains('zb-edit-btn')) {
+        var tr = t.closest('tr[data-id]');
+        var er = tr && tr.nextElementSibling;
+        if (!er || !er.classList.contains('zb-edit')) return;
+        if (er.hasAttribute('hidden')) { sshFill(er); er.removeAttribute('hidden'); t.value = 'Schließen'; }
+        else                          { er.setAttribute('hidden', ''); t.value = 'Bearbeiten'; }
+        return;
+      }
+      // Schließen aus dem Editor heraus.
+      if (t.classList.contains('zb-edit-close')) {
+        var erc = t.closest('tr.zb-edit');
+        erc.setAttribute('hidden', '');
+        var pr = erc.previousElementSibling;
+        var eb = pr && pr.querySelector('.zb-edit-btn');
+        if (eb) eb.value = 'Bearbeiten';
+        return;
+      }
+      // Speichern.
+      if (t.classList.contains('zb-edit-save')) {
+        saveEdit(t.closest('tr.zb-edit'), t);
+        return;
+      }
+    });
+
+    // Aktiv-Schalter -> ENABLED setzen (kein Reload nötig).
+    tgTable.addEventListener('change', function(ev){
+      if (!ev.target.classList.contains('zb-enabled')) return;
+      var tr = ev.target.closest('tr[data-id]');
+      var id = tr.dataset.id;
+      var val = ev.target.checked ? 'yes' : 'no';
+      zbPost(TG_URL, { action:'edit', id:id }, { ENABLED: val }).then(function(r){
+        var res = (r.data && r.data.results && r.data.results.ENABLED) || null;
+        if (res && res.ok) { rowMsg(tr, true, val === 'yes' ? 'aktiviert' : 'deaktiviert'); }
+        else {
+          ev.target.checked = !ev.target.checked; // zurückrollen
+          rowMsg(tr, false, (res && res.msg) || (r.data && r.data.error) || 'Fehler');
+        }
+      });
+    });
+  }
+
+  // ---- Listen-Editor (Array-Felder: Includes/Excludes) -----------------
+  // Chips hinzufügen/entfernen; der kanonische (leerzeichengetrennte) Wert
+  // steht im versteckten data-name-Feld, das die Speichern-Logik liest.
+  function zbListSync(list){
+    var hidden = list.querySelector('input[type="hidden"][data-name]');
+    var vals = [];
+    list.querySelectorAll('.zb-chip-v').forEach(function(s){ vals.push(s.textContent); });
+    if (hidden) hidden.value = vals.join(' ');
+    var empty = list.querySelector('.zb-list-empty');
+    if (empty) empty.style.display = vals.length ? 'none' : '';
+  }
+  function zbListAdd(list, val){
+    val = (val || '').trim();
+    if (!val) return;
+    var dup = false;
+    list.querySelectorAll('.zb-chip-v').forEach(function(s){ if (s.textContent === val) dup = true; });
+    if (dup) return;
+    var chip = document.createElement('span');
+    chip.className = 'zb-chip';
+    var v = document.createElement('span');
+    v.className = 'zb-chip-v';
+    v.textContent = val;
+    var x = document.createElement('i');
+    x.className = 'fa fa-times zb-chip-x';
+    x.setAttribute('role', 'button');
+    x.setAttribute('aria-label', 'Entfernen');
+    chip.appendChild(v); chip.appendChild(x);
+    list.querySelector('.zb-chips').appendChild(chip);
+    zbListSync(list);
+  }
+  document.querySelectorAll('.zb-list').forEach(function(list){
+    var input  = list.querySelector('.zb-list-input');
+    var addbtn = list.querySelector('.zb-list-addbtn');
+    if (addbtn) addbtn.addEventListener('click', function(){ zbListAdd(list, input.value); input.value = ''; input.focus(); });
+    if (input)  input.addEventListener('keydown', function(e){
+      if (e.key === 'Enter') { e.preventDefault(); zbListAdd(list, input.value); input.value = ''; }
+    });
+    list.addEventListener('click', function(e){
+      var x = e.target.closest('.zb-chip-x');
+      if (!x) return;
+      var chip = x.closest('.zb-chip');
+      if (chip) { chip.parentNode.removeChild(chip); zbListSync(list); }
+    });
+  });
+
+  // ---- Datei-Browser für den SSH-Schlüssel -----------------------------
+  // Nutzt Unraids globale openFileBrowser-Funktion (WebGUI). Den Button nur
+  // zeigen, wenn die Funktion existiert; sonst bleibt die manuelle Eingabe.
+  if (typeof openFileBrowser === 'function') {
+    document.querySelectorAll('.zb-browse').forEach(function(b){ b.hidden = false; });
+    document.addEventListener('click', function(ev){
+      var b = ev.target.closest && ev.target.closest('.zb-browse');
+      if (!b) return;
+      var inp = b.parentNode.querySelector('input');
+      if (!inp) return;
+      // Startverzeichnis: Ordner des aktuellen Werts, sonst /root.
+      var root = '/root';
+      if (inp.value && inp.value.charAt(0) === '/') {
+        root = inp.value.replace(/\/[^\/]*$/, '') || '/';
+      }
+      try { openFileBrowser(inp, root, '', false, true); } catch (e) { /* Eingabe bleibt manuell möglich */ }
+    });
+  }
+})();
+</script>

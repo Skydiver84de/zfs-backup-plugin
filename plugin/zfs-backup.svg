@@ -1,0 +1,11 @@
+<svg viewBox="0 0 128 128" width="128" height="128" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="zfs-backup">
+  <title>zfs-backup</title>
+  <rect x="6" y="6" width="116" height="116" rx="26" fill="#0E5E4E"/>
+  <path d="M26 42 V88 A28 11 0 0 0 82 88 V42" fill="#ffffff"/>
+  <ellipse cx="54" cy="42" rx="28" ry="11" fill="#ffffff"/>
+  <ellipse cx="54" cy="58" rx="28" ry="11" fill="none" stroke="#0E5E4E" stroke-width="3.5"/>
+  <ellipse cx="54" cy="74" rx="28" ry="11" fill="none" stroke="#0E5E4E" stroke-width="3.5"/>
+  <circle cx="95" cy="95" r="23" fill="#FF8C2F" stroke="#0E5E4E" stroke-width="5"/>
+  <line x1="95" y1="95" x2="95" y2="82" stroke="#ffffff" stroke-width="4" stroke-linecap="round"/>
+  <line x1="95" y1="95" x2="105" y2="99" stroke="#ffffff" stroke-width="4" stroke-linecap="round"/>
+</svg>

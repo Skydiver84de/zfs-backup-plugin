@@ -1,0 +1,69 @@
+<?xml version='1.0' standalone='yes'?>
+
+<!DOCTYPE PLUGIN [
+<!ENTITY name      "zfs-backup">
+<!ENTITY author    "Skydiver84de">
+<!ENTITY version   "0000.00.00">
+<!ENTITY md5       "00000000000000000000000000000000">
+<!ENTITY plugdir   "/boot/config/plugins/&name;">
+<!ENTITY emhttp    "/usr/local/emhttp/plugins/&name;">
+<!ENTITY giturl    "https://raw.githubusercontent.com/Skydiver84de/zfs-backup-plugin/main">
+<!ENTITY txz       "&name;-&version;.txz">
+<!ENTITY pkgurl    "&giturl;/plugin/packages/&txz;">
+]>
+
+<!--
+  zfs-backup – Unraid-Plugin.
+  Installation über die Unraid-Plugins-Seite: das Paket (&txz;) wird aus dem
+  öffentlichen Repo geladen und per MD5 geprüft. Version, MD5 und das passende
+  .txz erzeugt plugin/build.sh (siehe RELEASING.md). Updates laufen über
+  pluginURL (das .plg im Repo).
+-->
+
+<PLUGIN name="&name;"
+        author="&author;"
+        version="&version;"
+        min="6.12.0"
+        icon="zfs-backup.png"
+        pluginURL="&giturl;/plugin/&name;.plg"
+        support="https://github.com/Skydiver84de/zfs-backup-plugin">
+
+<CHANGES>
+### &version;
+- Erstes öffentliches Release: Headless ZFS-Backup-Framework als Unraid-Plugin
+  mit Web-GUI – Snapshots, lokale und Remote-Replikation, Pruning, Verify,
+  Datei-/Ordner-/Snapshot-Restore, Zeitplan, Dashboard-Kachel und native
+  Unraid-Benachrichtigungen.
+</CHANGES>
+
+<!-- 1. Paket aus dem Repo laden (Unraid lädt die URL nach Name und prüft MD5). -->
+<FILE Name="&plugdir;/&txz;">
+<URL>&pkgurl;</URL>
+<MD5>&md5;</MD5>
+</FILE>
+
+<!-- 2. Installieren + Setup. -->
+<FILE Run="/bin/bash">
+<INLINE>
+upgradepkg --install-new "&plugdir;/&txz;"
+bash "&emhttp;/install.sh" || {
+  echo "FEHLER: Setup fehlgeschlagen (siehe oben, z. B. cache/system kein Dataset)."
+  exit 1
+}
+echo ""
+echo "zfs-backup &version; installiert. GUI: Settings -> ZFS Backup   ·   CLI: zfs-backup --help"
+</INLINE>
+</FILE>
+
+<!-- Entfernen -->
+<FILE Run="/bin/bash" Method="remove">
+<INLINE>
+if [ -f "&emhttp;/uninstall.sh" ]; then bash "&emhttp;/uninstall.sh"; fi
+for p in /var/log/packages/&name;-[0-9]*; do
+  if [ -e "$p" ]; then removepkg "$(basename "$p")"; fi
+done
+rm -f "&plugdir;/&txz;"
+</INLINE>
+</FILE>
+
+</PLUGIN>

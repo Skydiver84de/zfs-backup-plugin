@@ -1,0 +1,66 @@
+# Bash-Completion für zfs-backup (Plugin-Wrapper) und zfs-backup.sh.
+# Vervollständigt Befehle/Flags sowie – kontextabhängig – Ziel-IDs und
+# Konfigurations-Optionen über die headless-Schnittstelle des Skripts.
+
+_zfs_backup() {
+    local cur prev bin
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+    bin="${COMP_WORDS[0]}"
+
+    local commands="--help --version --run --status --log-tail --simulate \
+        --config-check --config-schema --get-config --set-config \
+        --datasets --snapshots --snapshot-tree --dataset-snapshots \
+        --snapshot-ls --snapshot-cat --capacity --targets \
+        --add-target --edit-target --delete-target --test-target \
+        --verify --verify-source --verify-local --verify-remote \
+        --reset-statistics --reset-run-status --delete-logs \
+        --thin-history --delete-managed-snapshots \
+        --json --yes"
+
+    case "$prev" in
+        --edit-target|--delete-target|--test-target)
+            # Ziel-IDs aus --targets --json (ohne jq)
+            local ids
+            ids=$("$bin" --targets --json 2>/dev/null | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
+            COMPREPLY=( $(compgen -W "$ids" -- "$cur") )
+            return 0
+            ;;
+        --get-config|--set-config)
+            # Options-Namen aus dem Config-Schema (erste Spalte der Textausgabe)
+            local opts
+            opts=$("$bin" --config-schema 2>/dev/null | awk '/^[A-Za-z]/{print $1}')
+            COMPREPLY=( $(compgen -W "$opts" -- "$cur") )
+            return 0
+            ;;
+    esac
+
+    # Bereits getippte Flags nicht erneut vorschlagen (kein doppeltes --run).
+    local used=" ${COMP_WORDS[*]} "
+    local avail="" w
+    for w in $commands; do
+        [[ "$used" == *" $w "* ]] && continue
+        avail+=" $w"
+    done
+
+    COMPREPLY=( $(compgen -W "$avail" -- "$cur") )
+}
+
+complete -F _zfs_backup zfs-backup zfs-backup.sh
+
+# Completion für das Dev-Build-Skript plugin/build.sh. Vervollständigt aktuell
+# nur die Option --install (der optionale Versions-Parameter bleibt frei).
+# Hinweis: greift bei "./build.sh", "plugin/build.sh" o. ä. (bash fällt auf den
+# Basisnamen zurück) – NICHT bei "bash plugin/build.sh", da dort "bash" das
+# Kommando ist. Dafür das Skript direkt ausführen: ./plugin/build.sh --install
+_zfs_backup_build() {
+    local cur="${COMP_WORDS[COMP_CWORD]}"
+    # --install nur anbieten, solange es nicht schon in der Zeile steht
+    # (sonst wird es bei jedem TAB erneut angehängt).
+    local w
+    for w in "${COMP_WORDS[@]}"; do
+        [ "$w" = "--install" ] && { COMPREPLY=(); return 0; }
+    done
+    COMPREPLY=( $(compgen -W "--install" -- "$cur") )
+}
+complete -F _zfs_backup_build build.sh

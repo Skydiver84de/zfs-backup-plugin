@@ -60,9 +60,11 @@ Snapshot-Bestand der Quelle.
   ISO, z. B. `nas1_daily_2026-06-06_02-00`,
   `nas1_weekly_2026-W23_02-00`, `nas1_monthly_2026-06_02-00`,
   `nas1_yearly_2026_02-00`. Prefix konfigurierbar (`SNAPSHOT_PREFIX`).
-* **Version:** `SCRIPT_VERSION` (Konstante am Skriptanfang) ist die **einzige**
-  Versionsquelle. Tags laufen nur als Release-Marker parallel (siehe
-  RELEASING.md), nicht als Versionsquelle.
+* **Version:** datumsbasiert (Unraid-Schema). Einzige Quelle ist das
+  **Build-Datum**: `plugin/build.sh` stempelt es beim Paketbau in `SCRIPT_VERSION`
+  der installierten Kopie (Release `<datum>`, Test `<datum>dev`). Im Repo ist
+  `SCRIPT_VERSION` nur der Platzhalter `"0-dev"` und wird **nicht** manuell
+  gepflegt. Tags laufen nur als Release-Marker parallel (siehe RELEASING.md).
 * **Updates:** laufen über die Unraid-Plugin-Seite (`.plg`-Version); kein
   In-Skript-Update.
 * **Config:** wird bei jedem Start geprüft und in ein dokumentiertes

@@ -5,9 +5,11 @@
 das `.txz`-Paket per raw-URL aus `plugin/packages/` und prüft es per MD5.
 
 **Eine** Versionsnummer, **datumsbasiert** (Unraid-Konvention), z. B. `2026.06.18`
-(bei mehreren Releases am selben Tag ein Suffix: `2026.06.18a`). Dieselbe Version
-steht in `SCRIPT_VERSION` (`zfs-backup.sh`), im CHANGELOG-Kopf, im `.plg` und im
-`.txz`-Dateinamen — kein zweites, semantisches Schema.
+(bei mehreren Releases am selben Tag ein Suffix: `2026.06.18a`). Quelle ist allein
+das **Build-Datum**: `build.sh` stempelt es beim Paketbau in die installierte
+Kopie (`SCRIPT_VERSION`), in den `.txz`-Dateinamen und ins `.plg`. Im Repo bleibt
+`SCRIPT_VERSION` der Platzhalter `"0-dev"` — **nicht** manuell pflegen. Nur der
+CHANGELOG-Kopf wird von Hand mit der Datums-Version ergänzt.
 
 ## Wichtig: das `.txz` wird auf Unraid gebaut
 
@@ -26,9 +28,9 @@ saubere Datums-Version in diese Dateien. Eine explizit übergebene Version
 
 Annahme: Version `JJJJ.MM.TT`.
 
-1. **Version setzen** in `zfs-backup.sh` (`SCRIPT_VERSION="JJJJ.MM.TT"`) und den
-   CHANGELOG-Kopf `## JJJJ.MM.TT – <Stichwort>` ergänzen; `bash -n zfs-backup.sh`
-   prüfen, committen, pushen.
+1. **CHANGELOG-Kopf** `## JJJJ.MM.TT – <Stichwort>` ergänzen; `bash -n zfs-backup.sh`
+   prüfen, committen, pushen. (Die Version selbst wird **nicht** im Skript gesetzt —
+   `build.sh` stempelt sie aus dem Datum.)
 
 2. **Auf Unraid** bauen:
    ```bash

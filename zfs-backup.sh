@@ -6,7 +6,10 @@ set -o pipefail
 # ZFS Backup Framework
 ########################################
 
-SCRIPT_VERSION="2026.06.18"
+# Reiner Platzhalter: die echte Version ist datumsbasiert (Unraid-Schema) und
+# wird beim Paketbau in die installierte Kopie gestempelt (plugin/build.sh).
+# Aus einem reinen Repo-Checkout (ungebaut) zeigt --version daher "0-dev".
+SCRIPT_VERSION="0-dev"
 
 readonly SCRIPT_PATH="$(realpath "$0")"
 # Skriptverzeichnis und Datenverzeichnis sind getrennt: im Plugin-Kontext wird

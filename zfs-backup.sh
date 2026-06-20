@@ -115,10 +115,6 @@ console_supports_color() {
     [ -t 1 ] && [ -z "${NO_COLOR:-}" ]
 }
 
-console_stderr_supports_color() {
-    [ -t 2 ] && [ -z "${NO_COLOR:-}" ]
-}
-
 console_color() {
     local code="$1"
 
@@ -155,22 +151,42 @@ console_line() {
     printf "%s\n" "$msg"
 }
 
+# Fortschritts-/Status-Modell (eine Quelle, mehrere Senken):
+#   * Phasen:  log_phase -> write_progress (GUI-Progress-Datei) + console_phase.
+#   * Detail:  console_status / console_stream_status -> write_progress_detail
+#              (GUI) + eine live überschreibbare Konsolenzeile.
+# Die beiden Detail-Funktionen unterscheiden sich NUR in Kanal/Frequenz:
+#   * console_status: grobe Schritte (z. B. "Dataset 3/24") -> stdout. Am TTY per
+#     \r überschrieben, ohne TTY (gestreamte GUI-Wartung) als ganze Zeile sichtbar.
+#   * console_stream_status: hochfrequente Übertragungs-% -> nur /dev/tty, damit
+#     der gestreamte stdout nicht mit hunderten %-Zeilen geflutet wird.
+# Die eigentliche Zeilendarstellung teilen sich beide über _console_status_render.
+
+# Gemeinsame Basis: rendert die transiente, per \r überschreibbare Statuszeile auf
+# den eigenen stdout (vom Aufrufer ggf. nach /dev/tty umgeleitet). Farbe nur, wenn
+# NO_COLOR nicht gesetzt ist – gerendert wird ohnehin nur auf ein Terminal.
+_console_status_render() {
+    local msg="$1"
+
+    printf "\r"
+    [ -z "${NO_COLOR:-}" ] && printf "\033[0;36m"
+    printf "[%s] • " "$(date '+%d.%m.%Y %H:%M:%S')"
+    [ -z "${NO_COLOR:-}" ] && printf "\033[0m"
+    printf "%s\033[K" "$msg"
+    CONSOLE_STATUS_ACTIVE=1
+}
+
 console_status() {
     local msg="$1"
 
     write_progress_detail "$msg"    # auch headless: Unterschritt für die GUI
 
     if [ -t 1 ]; then
-        # Interaktives Terminal: Statuszeile per \r an Ort und Stelle überschreiben.
-        console_color "0;36"
-        printf "\r[%s] • " "$(date '+%d.%m.%Y %H:%M:%S')"
-        console_reset
-        printf "%s\033[K" "$msg"
-        CONSOLE_STATUS_ACTIVE=1
+        _console_status_render "$msg"
     else
-        # Kein TTY (z. B. gestreamte GUI-Wartung wie Ausdünnen/Verify): als
-        # vollständige Zeile ausgeben, damit der Fortschritt im Stream sichtbar
-        # ist – ähnlich wie der Live-Status eines normalen Laufs.
+        # Kein TTY (gestreamte GUI-Wartung wie Ausdünnen/Verify): als ganze Zeile,
+        # damit der Fortschritt im Stream sichtbar ist – ähnlich dem Live-Status
+        # eines normalen Laufs.
         printf "[%s] • %s\n" "$(date '+%d.%m.%Y %H:%M:%S')" "$msg"
     fi
 }
@@ -225,16 +241,9 @@ console_stream_status() {
     fi
     [ "$TTY_USABLE" = "1" ] || return
 
-    printf "\r" > /dev/tty
-    if console_stderr_supports_color; then
-        printf "\033[0;36m" > /dev/tty
-    fi
-    printf "[%s] • " "$(date '+%d.%m.%Y %H:%M:%S')" > /dev/tty
-    if console_stderr_supports_color; then
-        printf "\033[0m" > /dev/tty
-    fi
-    printf "%s\033[K" "$msg" > /dev/tty
-    CONSOLE_STATUS_ACTIVE=1
+    # Gleiche Darstellung wie console_status, nur auf /dev/tty statt stdout (kein
+    # Fluten des gestreamten stdout mit hochfrequenten %-Zeilen).
+    _console_status_render "$msg" >/dev/tty
 }
 
 compact_transfer_label() {

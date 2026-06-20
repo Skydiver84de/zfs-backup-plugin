@@ -2573,12 +2573,10 @@ create_snapshot_by_type() {
 
 create_snapshot_set() {
     local ds="$1"
-    local force_daily="${2:-no}"
     local created=0
 
     local DATE=$(date +%Y-%m-%d)
     local TIME=$(date +%H-%M)
-    local FORCE_TIME=$(date +%H-%M-%S)
     local WEEK=$(date +%G-W%V)
     local MONTH=$(date +%Y-%m)
     local YEAR=$(date +%Y)
@@ -2592,10 +2590,7 @@ create_snapshot_set() {
         fi
     fi
 
-    # force_daily (Ausdünnen) erzeugt den Anker-Daily unabhängig von der Retention.
-    if [ "$force_daily" = "yes" ]; then
-        create_snapshot_by_type "$ds" daily "${SNAPSHOT_PREFIX}daily_${DATE}_${FORCE_TIME}" && ((created++))
-    elif type_enabled daily; then
+    if type_enabled daily; then
         if ! snapshot_exists "$ds" "${SNAPSHOT_PREFIX}daily_${DATE}_"; then
             create_snapshot_by_type "$ds" daily "${SNAPSHOT_PREFIX}daily_${DATE}_${TIME}" && ((created++))
         else
@@ -3208,9 +3203,9 @@ delete_all_managed_snapshots_apply() {
 }
 
 
-# Prompt-freier Kern: dünnt die Snapshot-Historie aus (neuer Daily erzwingen,
-# aktive Ziele angleichen, Quelle temporär auf nur den neuesten Daily prunen,
-# Ziele nachziehen). Rückgabe 0 (ok) / 1 (abgebrochen wegen Fehler).
+# Prompt-freier Kern: dünnt die Snapshot-Historie aus – behält je aktivem Typ
+# (Retention > 0) genau EINEN Anker (hourly/daily/weekly/monthly/yearly), gleicht
+# aktive Ziele an und zieht sie nach. Rückgabe 0 (ok) / 1 (abgebrochen wegen Fehler).
 thin_snapshot_history_apply() {
     local old_keep_hourly="$KEEP_HOURLY"
     local old_keep_daily="$KEEP_DAILY"
@@ -3228,23 +3223,25 @@ thin_snapshot_history_apply() {
 
     log_phase "Snapshot-Historie ausdünnen"
 
-    # Ausdünn-Retention BEWUSST schon vor dem Snapshot-Job setzen: so unterdrückt
-    # type_enabled das Seeding von weekly/monthly/yearly (die gleich ohnehin
-    # weggeprunt würden – sonst anlegen und sofort wieder löschen), während der
-    # Anker-Daily über force_daily trotzdem entsteht. Originalwerte werden nach
-    # dem Pruning wiederhergestellt.
-    KEEP_HOURLY=0
-    KEEP_DAILY=1
-    KEEP_WEEKLY=0
-    KEEP_MONTHLY=0
-    KEEP_YEARLY=0
+    # Ausdünnen = je Typ EINEN Anker behalten, sofern dessen Retention > 0. Dafür
+    # die Retention temporär auf 1 (bzw. 0 für deaktivierte Typen) setzen, dann
+    # den normalen Snapshot-Job laufen lassen: das Seeding stellt für die aktuelle
+    # Periode je aktivem Typ einen Snapshot sicher (hourly/daily/weekly/monthly/
+    # yearly), das anschließende Pruning behält je 1. Ergebnis: ein Anker je
+    # aktivem Typ – inkl. tiefem Anker (yearly) für das Reaktivierungs-Fenster.
+    # Originalwerte werden nach dem Pruning wiederhergestellt.
+    KEEP_HOURLY=$((  old_keep_hourly  > 0 ? 1 : 0 ))
+    KEEP_DAILY=$((   old_keep_daily   > 0 ? 1 : 0 ))
+    KEEP_WEEKLY=$((  old_keep_weekly  > 0 ? 1 : 0 ))
+    KEEP_MONTHLY=$(( old_keep_monthly > 0 ? 1 : 0 ))
+    KEEP_YEARLY=$((  old_keep_yearly  > 0 ? 1 : 0 ))
 
     before_run_errors="$RUN_ERRORS"
     log_phase "Snapshots"
-    run_snapshot_job yes
+    run_snapshot_job
 
     if [ "$RUN_ERRORS" -gt "$before_run_errors" ]; then
-        console_error "Snapshot-Historie nicht ausgedünnt: neuer Daily-Snapshot konnte nicht überall erstellt werden"
+        console_error "Snapshot-Historie nicht ausgedünnt: Snapshots konnten nicht überall erstellt werden"
         log "FEHLER: Snapshot-Historie ausdünnen abgebrochen, Snapshot-Erstellung fehlgeschlagen"
         return 1
     fi
@@ -4421,7 +4418,6 @@ simulate_excluded_target_snapshots() {
 }
 
 run_snapshot_job() {
-    local force_daily="${1:-no}"
     local count=0
     local total=0
     local index=0
@@ -4443,7 +4439,7 @@ run_snapshot_job() {
         ((index++))
         console_status "Snapshot-Prüfung [${index}/${total}]: $ds"
         log "Snapshot-Prüfung [${index}/${total}]: $ds"
-        create_snapshot_set "$ds" "$force_daily"
+        create_snapshot_set "$ds"
         ((count++))
     done
 
@@ -6703,8 +6699,8 @@ Verwendung:
       Alle Logdateien löschen.
 
   zfs-backup.sh --thin-history --yes
-      Snapshot-Historie ausdünnen (neuer Daily, aktive Ziele angleichen,
-      Quelle auf den neuesten Daily prunen, Ziele nachziehen).
+      Snapshot-Historie ausdünnen: je aktivem Typ (Retention > 0) genau einen
+      Anker behalten (hourly/daily/weekly/monthly/yearly), aktive Ziele angleichen.
 
   zfs-backup.sh --delete-managed-snapshots --yes
       Alle verwalteten Snapshots (Prefix) auf Quelle und aktiven Zielen
@@ -6747,8 +6743,8 @@ Maintenance:
       Zielen. Datasets, Verzeichnisse und Dateien werden nicht gelöscht.
 
   Snapshot-Historie ausdünnen
-      Erzwingt einen neuen Daily-Snapshot, synchronisiert aktive Ziele, behält
-      auf der Quelle nur diesen neuen Daily und gleicht aktive Ziele danach an.
+      Behält je aktivem Snapshot-Typ (Retention > 0) genau einen Anker auf der
+      Quelle (hourly/daily/weekly/monthly/yearly) und gleicht aktive Ziele danach an.
 
 Config:
 

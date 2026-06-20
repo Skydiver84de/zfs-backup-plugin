@@ -2,6 +2,13 @@
 
 ## Unveröffentlicht
 
+- **Ausdünnen behält je Typ einen Anker:** `--thin-history` reduziert die
+  Historie nicht mehr auf einen einzelnen Daily, sondern behält je aktivem
+  Snapshot-Typ (Retention > 0) genau einen Anker (hourly/daily/weekly/monthly/
+  yearly). So bleibt der tiefe Anker (z. B. yearly) erhalten — wichtig fürs
+  Reaktivierungs-Fenster deaktivierter Ziele. Vereinfacht zugleich den Code
+  (kein `force_daily`-Sonderpfad mehr; das Seeding erzeugt die Anker).
+
 - **Snapshot-Seeding:** Wöchentliche, monatliche und jährliche Snapshots werden
   nicht mehr nur am Kalenderstichtag (So. / 1. des Monats / 1.1.) erstellt,
   sondern sobald für die aktuelle Periode (ISO-Woche/Monat/Jahr) noch keiner

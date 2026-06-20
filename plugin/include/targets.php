@@ -8,13 +8,15 @@
  * CSRF prüft Unraid global (auto_prepend); das Formular sendet den Token mit.
  *
  * POST-Parameter:
- *   action=add     label, type(local|remote), base, [host]   (ID wird automatisch vergeben)
- *   action=delete  id (numerisch)
- *   action=test    id (numerisch)
- *   action=edit    id (numerisch), fields[FELD]=WERT … (mehrere erlaubt)
+ *   action=add      label, type(local|remote), base, [host]  (ID wird automatisch vergeben)
+ *   action=delete   id (numerisch)
+ *   action=test     id (numerisch)
+ *   action=edit     id (numerisch), fields[FELD]=WERT … (mehrere erlaubt)
+ *   action=move     id (numerisch), dir(up|down)            (eine Position verschieben)
+ *   action=reorder  order=ID,ID,…                           (komplette Backup-Reihenfolge)
  *
  * Antwort:
- *   {"ok":bool,"msg":"..."}                       (add/delete/test)
+ *   {"ok":bool,"msg":"..."}                       (add/delete/test/move/reorder)
  *   {"results":{"<FELD>":{"ok":bool,"msg":".."}}} (edit)
  */
 
@@ -33,7 +35,7 @@ $id     = (string)($_POST['id'] ?? '');
 /* IDs sind numerisch (automatisch vergeben). delete/test/edit brauchen eine
  * gültige ID; add nicht (dort kommt das Label, die ID vergibt der Kern).
  * Erst-Härtung vor dem Kern; die eigentliche Prüfung macht target_*. */
-if (in_array($action, ['delete', 'test', 'edit'], true)
+if (in_array($action, ['delete', 'test', 'edit', 'move'], true)
     && ($id === '' || !preg_match('/^[0-9]+$/', $id))) {
     http_response_code(400);
     echo json_encode(['error' => 'Ungültige Ziel-ID']);
@@ -96,6 +98,28 @@ switch ($action) {
         $rc = pclose($ph);
         echo "\n[Exit-Code: " . (int)$rc . "]\n";
         exit;
+
+    case 'move':
+        $dir = (string)($_POST['dir'] ?? '');
+        if (!in_array($dir, ['up', 'down'], true)) {
+            http_response_code(400);
+            echo json_encode(['ok' => false, 'msg' => 'Ungültige Richtung']);
+            break;
+        }
+        list($ok, $msg) = zb_run($cli, ['--move-target', $id, $dir]);
+        echo json_encode(['ok' => $ok, 'msg' => $msg]);
+        break;
+
+    case 'reorder':
+        $order = (string)($_POST['order'] ?? '');
+        if ($order === '' || !preg_match('/^[0-9]+(,[0-9]+)*$/', $order)) {
+            http_response_code(400);
+            echo json_encode(['ok' => false, 'msg' => 'Ungültige Reihenfolge']);
+            break;
+        }
+        list($ok, $msg) = zb_run($cli, ['--reorder-targets', $order]);
+        echo json_encode(['ok' => $ok, 'msg' => $msg]);
+        break;
 
     case 'edit':
         $fields  = $_POST['fields'] ?? [];

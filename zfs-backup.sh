@@ -850,6 +850,80 @@ target_delete() {
     return 0
 }
 
+# Ordnet die Ziele in der angegebenen Reihenfolge neu an (prompt-frei). Kern für
+# --reorder-targets. Erwartet ALLE aktuellen Ziel-IDs genau einmal als
+# kommagetrennte Liste (eine Permutation des Bestands). Die Reihenfolge legt
+# fest, in welcher Folge Backups laufen (erstes Ziel zuerst); siehe
+# for_each_enabled_target. Danach werden die IDs lückenlos = Position neu
+# vergeben (wie beim Löschen), die nach IDs benannten GUI-Caches verworfen.
+# Rückgabe 0/1.
+target_reorder() {
+    local order="$1"
+    local -a desired=()
+    local id seen="|"
+    local old_ifs="$IFS"
+
+    IFS=','
+    read -ra desired <<< "$order"
+    IFS="$old_ifs"
+
+    if [ "${#desired[@]}" -ne "${#TARGETS[@]}" ]; then
+        console_error "Reihenfolge muss genau ${#TARGETS[@]} Ziel-ID(s) enthalten (eine je vorhandenes Ziel)"
+        return 1
+    fi
+    for id in "${desired[@]}"; do
+        if ! target_array_contains "$id"; then
+            console_error "Unbekannte Ziel-ID in der Reihenfolge: $id"
+            return 1
+        fi
+        case "$seen" in
+            *"|${id}|"*) console_error "Ziel-ID doppelt in der Reihenfolge: $id"; return 1 ;;
+        esac
+        seen="${seen}${id}|"
+    done
+
+    TARGETS=("${desired[@]}")
+    # Renummeriert auf 1..N nach der neuen Reihenfolge und verwirft die GUI-Caches
+    # (Resequence ist ein No-Op + ohne Cache-Verwurf, falls die Reihenfolge schon
+    # passte – also kostenlos bei unveränderter Anordnung).
+    target_resequence
+    save_config_edits
+    return 0
+}
+
+# Verschiebt ein Ziel um eine Position nach oben/unten (prompt-frei). Komfort-
+# Wrapper um target_reorder für Auf-/Ab-Buttons in der GUI. Rückgabe 0/1.
+target_move() {
+    local target_id="$1"
+    local dir="$2"
+    local -a ids=("${TARGETS[@]}")
+    local n=${#ids[@]}
+    local i pos=-1 swap=-1 tmp joined
+
+    if ! target_array_contains "$target_id"; then
+        console_error "Ziel nicht gefunden: $target_id"
+        return 1
+    fi
+    for ((i=0; i<n; i++)); do
+        [ "${ids[$i]}" = "$target_id" ] && { pos=$i; break; }
+    done
+
+    case "$dir" in
+        up|hoch|oben) swap=$((pos-1)) ;;
+        down|runter|unten) swap=$((pos+1)) ;;
+        *) console_error "Richtung muss 'up' oder 'down' sein"; return 1 ;;
+    esac
+
+    if [ "$swap" -lt 0 ] || [ "$swap" -ge "$n" ]; then
+        console_error "Ziel ist bereits am Rand der Reihenfolge"
+        return 1
+    fi
+
+    tmp="${ids[$pos]}"; ids[$pos]="${ids[$swap]}"; ids[$swap]="$tmp"
+    printf -v joined '%s,' "${ids[@]}"
+    target_reorder "${joined%,}"
+}
+
 # Setzt ein einzelnes Feld eines bestehenden Ziels (prompt-frei). Kern für
 # --edit-target. Feld-Whitelist (schützt die CLI vor
 # beliebigen Feldern) plus feldspezifische Validierung über
@@ -2514,7 +2588,19 @@ create_snapshot_set() {
         fi
     fi
 
-    if type_enabled weekly && [ "$(date +%u)" = "7" ]; then
+    # Seeding-Prinzip (weekly/monthly/yearly): NICHT auf den Kalenderstichtag
+    # (So. / 1. des Monats / 1.1.) warten, sondern pro Periode genau einen
+    # Snapshot sicherstellen. Der Periodenschlüssel im Namen (ISO-Woche, Monat,
+    # Jahr) bestimmt die Eindeutigkeit; existiert er für die aktuelle Periode
+    # noch nicht, wird er angelegt. Folgen:
+    #   * Erstlauf seedet sofort alle Stufen -> tiefer Anker (z. B. yearly) ab
+    #     Tag 1, statt bis zum nächsten Stichtag zu warten. Das verlängert u. a.
+    #     das Fenster, in dem ein deaktiviertes Ziel per Incremental wieder
+    #     aufholen kann (kein Neuaufbau).
+    #   * Verpasste Stichtage heilen sich selbst (Box am 1.1. aus -> der nächste
+    #     Lauf legt den Jahres-Snapshot trotzdem an).
+    # Danach weiterhin genau einer pro Periode (Folgeläufe finden ihn vor).
+    if type_enabled weekly; then
         if ! snapshot_exists "$ds" "${SNAPSHOT_PREFIX}weekly_${WEEK}_"; then
             create_snapshot_by_type "$ds" weekly "${SNAPSHOT_PREFIX}weekly_${WEEK}_${TIME}" && ((created++))
         else
@@ -2523,7 +2609,7 @@ create_snapshot_set() {
         fi
     fi
 
-    if type_enabled monthly && [ "$(date +%d)" = "01" ]; then
+    if type_enabled monthly; then
         if ! snapshot_exists "$ds" "${SNAPSHOT_PREFIX}monthly_${MONTH}_"; then
             create_snapshot_by_type "$ds" monthly "${SNAPSHOT_PREFIX}monthly_${MONTH}_${TIME}" && ((created++))
         else
@@ -2532,7 +2618,7 @@ create_snapshot_set() {
         fi
     fi
 
-    if type_enabled yearly && [ "$(date +%m-%d)" = "01-01" ]; then
+    if type_enabled yearly; then
         if ! snapshot_exists "$ds" "${SNAPSHOT_PREFIX}yearly_${YEAR}_"; then
             create_snapshot_by_type "$ds" yearly "${SNAPSHOT_PREFIX}yearly_${YEAR}_${TIME}" && ((created++))
         else
@@ -4179,13 +4265,13 @@ simulate_dataset() {
     local MONTH=$(date +%Y-%m)
     local YEAR=$(date +%Y)
     local target_id
-    local weekly_due="no"
-    local monthly_due="no"
-    local yearly_due="no"
-
-    [ "$(date +%u)" = "7" ] && weekly_due="yes"
-    [ "$(date +%d)" = "01" ] && monthly_due="yes"
-    [ "$(date +%m-%d)" = "01-01" ] && yearly_due="yes"
+    # Seeding-Prinzip (vgl. create_snapshot_set): weekly/monthly/yearly sind
+    # immer "fällig" — erstellt wird, sobald für die aktuelle Periode
+    # (ISO-Woche/Monat/Jahr) noch kein Snapshot existiert, nicht erst am
+    # Kalenderstichtag (So./1./1.1.).
+    local weekly_due="yes"
+    local monthly_due="yes"
+    local yearly_due="yes"
 
     echo
     echo "$ds"
@@ -6578,6 +6664,14 @@ Verwendung:
       Erreichbarkeit eines Ziels prüfen (lokal: zfs list; remote: ggf. wecken
       und remote zfs list).
 
+  zfs-backup.sh --reorder-targets <id,id,...>
+      Backup-Reihenfolge der Ziele neu festlegen. Erwartet ALLE vorhandenen
+      Ziel-IDs genau einmal in der gewünschten Reihenfolge (erstes Ziel zuerst).
+      Die IDs werden danach lückenlos = Position neu vergeben.
+
+  zfs-backup.sh --move-target <id> <up|down>
+      Ein Ziel um eine Position nach oben/unten verschieben (Auf-/Ab-Buttons).
+
   zfs-backup.sh --reset-statistics --yes
       Gespeicherte Laufstatistiken löschen.
 
@@ -6920,6 +7014,33 @@ handle_cli() {
             exit $?
             ;;
 
+        --reorder-targets)
+
+            if [ "${#CLI_ARGS[@]}" -lt 2 ]; then
+                echo "Verwendung: zfs-backup.sh --reorder-targets <id,id,...>" >&2
+                echo "  (Alle vorhandenen Ziel-IDs in der gewünschten Backup-Reihenfolge; erstes zuerst.)" >&2
+                exit 1
+            fi
+            if target_reorder "${CLI_ARGS[1]}"; then
+                console_success "Reihenfolge gespeichert: ${TARGETS[*]}"
+                exit 0
+            fi
+            exit 1
+            ;;
+
+        --move-target)
+
+            if [ "${#CLI_ARGS[@]}" -lt 3 ]; then
+                echo "Verwendung: zfs-backup.sh --move-target <id> <up|down>" >&2
+                exit 1
+            fi
+            if target_move "${CLI_ARGS[1]}" "${CLI_ARGS[2]}"; then
+                console_success "Ziel verschoben: neue Reihenfolge ${TARGETS[*]}"
+                exit 0
+            fi
+            exit 1
+            ;;
+
         --reset-statistics)
 
             require_yes || exit 1
@@ -7237,7 +7358,7 @@ Snapshots / Retention|KEEP_WEEKLY|number|Aufzubewahrende wöchentliche Snapshots
 Snapshots / Retention|KEEP_MONTHLY|number|Aufzubewahrende monatliche Snapshots. 0 deaktiviert den Typ (keine Erstellung, kein Bestand).
 Snapshots / Retention|KEEP_YEARLY|number|Aufzubewahrende jährliche Snapshots. 0 deaktiviert den Typ (keine Erstellung, kein Bestand).
 Pruning / Cleanup|ENABLE_SOURCE_PRUNING|bool|Löscht ältere verwaltete Snapshots auf der Quelle gemäß Retention.
-Ziele|TARGETS|array|Liste der Replikationsziele. Pflege über die Ziel-Befehle (--add-target, --edit-target, --delete-target, --test-target).
+Ziele|TARGETS|array|Liste der Replikationsziele in Backup-Reihenfolge (erstes Ziel zuerst). Pflege über die Ziel-Befehle (--add-target, --edit-target, --delete-target, --test-target, --reorder-targets, --move-target).
 Logs / Benachrichtigung|LOG_RETENTION_DAYS|number|Anzahl Tage, die tägliche Logdateien behalten werden.
 Logs / Benachrichtigung|NOTIFY_START|enum:aus,normal,warning,alert|Unraid-Notification beim Start eines Laufs. Stufe wählen oder "aus".
 Logs / Benachrichtigung|NOTIFY_SUCCESS|enum:aus,normal,warning,alert|Unraid-Notification bei erfolgreichem Lauf. Stufe wählen oder "aus".
@@ -7750,7 +7871,7 @@ esac
 # wird blockiert, bis die Config geprüft wurde.
 if [ "$CONFIG_UPDATED" -eq 1 ]; then
     case "$1" in
-        --help|--version|--status|--gui-init|--check-stale|--capacity|--datasets|--snapshots|--targets|--dataset-snapshots|--snapshot-tree|--snapshot-ls|--snapshot-cat|--snapshot-restore|--log-tail|--log-follow|--progress-follow|--config-check|--config-schema|--get-config|--set-config|--add-target|--delete-target|--edit-target|--test-target|--reset-statistics|--reset-run-status|--delete-logs|--thin-history|--delete-managed-snapshots|--cleanup-orphans)
+        --help|--version|--status|--gui-init|--check-stale|--capacity|--datasets|--snapshots|--targets|--dataset-snapshots|--snapshot-tree|--snapshot-ls|--snapshot-cat|--snapshot-restore|--log-tail|--log-follow|--progress-follow|--config-check|--config-schema|--get-config|--set-config|--add-target|--delete-target|--edit-target|--test-target|--reorder-targets|--move-target|--reset-statistics|--reset-run-status|--delete-logs|--thin-history|--delete-managed-snapshots|--cleanup-orphans)
             ;;
         *)
             echo

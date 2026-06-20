@@ -84,9 +84,14 @@ es werden keine erstellt und vorhandene beim Pruning entfernt (kein separater
 
 Replikation läuft über Ziele: anzeigen (`--targets [--json]`), anlegen
 (`--add-target <label> <local|remote> <base-dataset> [ssh-host]`), ändern
-(`--edit-target`), testen (`--test-target`), löschen (`--delete-target`). Die
-**ID** ist numerisch und automatisch (1, 2, … – beim Löschen lückenlos neu
-nummeriert); der frei wählbare Anzeigename ist das **Label**.
+(`--edit-target`), testen (`--test-target`), löschen (`--delete-target`),
+sortieren (`--reorder-targets <id,id,...>` oder `--move-target <id> <up|down>`).
+Die **ID** ist numerisch und automatisch (1, 2, … – beim Löschen und Sortieren
+lückenlos neu nummeriert); der frei wählbare Anzeigename ist das **Label**.
+
+Die Reihenfolge der Ziele ist zugleich die **Backup-Reihenfolge** (erstes Ziel
+zuerst, letztes zuletzt). So lässt sich z. B. festlegen, dass das schnelle
+lokale Ziel vor dem langsamen Remote-Ziel gesichert wird.
 
 ```bash
 TARGETS=( 1 2 )
@@ -116,6 +121,14 @@ den letzten gemeinsamen Snapshot zurückgerollt (Änderungen am Replikat werden
 verworfen, die Quelle bleibt unberührt). Sends/Receives nutzen Resume-Tokens
 (`zfs send -t`) und fortsetzbares `receive -s`. Ist der Remote nicht per Ping
 erreichbar, weckt das Skript ihn per `etherwake` und wartet auf SSH/ZFS.
+
+> **Hinweis – langes Deaktivieren erzwingt einen Neuaufbau.** Ein deaktiviertes
+> Ziel hält das Quell-Pruning nicht auf: die Quelle prunt während der Pause
+> normal weiter. Wird das Ziel **länger als die tiefste aktive Retention-Stufe**
+> deaktiviert (z. B. länger als `KEEP_YEARLY` Jahre), existiert beim
+> Reaktivieren kein gemeinsamer Snapshot mehr – der nächste Lauf baut das Ziel
+> dann **komplett neu auf** (volle Übertragung) statt inkrementell aufzuholen.
+> Innerhalb des Fensters fädelt es sich per Incremental Send wieder ein.
 
 ### Verwaiste Ziel-Datasets
 

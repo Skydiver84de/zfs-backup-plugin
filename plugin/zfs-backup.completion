@@ -13,13 +13,14 @@ _zfs_backup() {
         --datasets --snapshots --snapshot-tree --dataset-snapshots \
         --snapshot-ls --snapshot-cat --capacity --targets \
         --add-target --edit-target --delete-target --test-target \
+        --reorder-targets --move-target \
         --verify --verify-source --verify-local --verify-remote \
         --reset-statistics --reset-run-status --delete-logs \
         --thin-history --delete-managed-snapshots \
         --json --yes"
 
     case "$prev" in
-        --edit-target|--delete-target|--test-target)
+        --edit-target|--delete-target|--test-target|--move-target)
             # Ziel-IDs aus --targets --json (ohne jq)
             local ids
             ids=$("$bin" --targets --json 2>/dev/null | grep -o '"id":"[^"]*"' | cut -d'"' -f4)

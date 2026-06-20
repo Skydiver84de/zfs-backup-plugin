@@ -1,5 +1,17 @@
 # Changelog
 
+## Unveröffentlicht
+
+- **Snapshot-Seeding:** Wöchentliche, monatliche und jährliche Snapshots werden
+  nicht mehr nur am Kalenderstichtag (So. / 1. des Monats / 1.1.) erstellt,
+  sondern sobald für die aktuelle Periode (ISO-Woche/Monat/Jahr) noch keiner
+  existiert. Der Erstlauf legt damit sofort alle Stufen an (tiefer Anker ab
+  Tag 1), und ein verpasster Stichtag (z. B. Server am 1.1. aus) heilt sich beim
+  nächsten Lauf selbst.
+- **Ziel-Reihenfolge:** Neue Befehle `--reorder-targets <id,id,...>` und
+  `--move-target <id> <up|down>` legen die Backup-Reihenfolge der Ziele fest
+  (erstes Ziel zuerst). Grundlage für das Sortieren der Ziele in der GUI.
+
 ## 2026.06.18 – Erstes Release
 
 Erstes Release. ZFS-Backup-Framework für Unraid als natives Plugin mit Web-GUI.

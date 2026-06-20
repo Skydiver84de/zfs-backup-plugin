@@ -708,7 +708,7 @@ p.muted { color:#999; font-size:12px; }
     <tbody>
     <?php if (count($targets) === 0): ?>
       <tr><td colspan="6" class="empty">Keine Ziele konfiguriert.</td></tr>
-    <?php else: foreach ($targets as $t):
+    <?php else: $tcount = count($targets); foreach (array_values($targets) as $ti => $t):
       $tid  = $t['id'];
       $rem  = $t['remote'] ?? null;
     ?>
@@ -727,6 +727,8 @@ p.muted { color:#999; font-size:12px; }
           </label>
         </td>
         <td class="act">
+          <input type="button" class="zb-up" value="&#9650;" title="Früher sichern (eine Position nach oben)"<?= $ti === 0 ? ' disabled' : '' ?>>
+          <input type="button" class="zb-down" value="&#9660;" title="Später sichern (eine Position nach unten)"<?= $ti === $tcount - 1 ? ' disabled' : '' ?>>
           <input type="button" class="zb-edit-btn" value="Bearbeiten">
           <input type="button" class="zb-test" value="Testen">
           <input type="button" class="zb-del" value="Löschen">
@@ -2050,6 +2052,17 @@ p.muted { color:#999; font-size:12px; }
         if (!confirm('Ziel "' + id + '" wirklich löschen?')) return;
         ev.target.disabled = true;
         zbPost(TG_URL, { action:'delete', id:id }).then(function(r){
+          if (r.data && r.data.ok) { location.hash = 'targets'; location.reload(); }
+          else { ev.target.disabled = false; rowMsg(tr, false, (r.data && (r.data.msg || r.data.error)) || 'Fehler'); }
+        });
+      }
+
+      // Reihenfolge ändern (= Backup-Reihenfolge): eine Position hoch/runter.
+      if (ev.target.classList.contains('zb-up') || ev.target.classList.contains('zb-down')) {
+        var dir = ev.target.classList.contains('zb-up') ? 'up' : 'down';
+        ev.target.disabled = true;
+        rowMsg(tr, true, 'Verschiebe …');
+        zbPost(TG_URL, { action:'move', id:id, dir:dir }).then(function(r){
           if (r.data && r.data.ok) { location.hash = 'targets'; location.reload(); }
           else { ev.target.disabled = false; rowMsg(tr, false, (r.data && (r.data.msg || r.data.error)) || 'Fehler'); }
         });

@@ -3228,6 +3228,17 @@ thin_snapshot_history_apply() {
 
     log_phase "Snapshot-Historie ausdünnen"
 
+    # Ausdünn-Retention BEWUSST schon vor dem Snapshot-Job setzen: so unterdrückt
+    # type_enabled das Seeding von weekly/monthly/yearly (die gleich ohnehin
+    # weggeprunt würden – sonst anlegen und sofort wieder löschen), während der
+    # Anker-Daily über force_daily trotzdem entsteht. Originalwerte werden nach
+    # dem Pruning wiederhergestellt.
+    KEEP_HOURLY=0
+    KEEP_DAILY=1
+    KEEP_WEEKLY=0
+    KEEP_MONTHLY=0
+    KEEP_YEARLY=0
+
     before_run_errors="$RUN_ERRORS"
     log_phase "Snapshots"
     run_snapshot_job yes
@@ -3250,12 +3261,6 @@ thin_snapshot_history_apply() {
         ((RUN_ERRORS++))
         return 1
     fi
-
-    KEEP_HOURLY=0
-    KEEP_DAILY=1
-    KEEP_WEEKLY=0
-    KEEP_MONTHLY=0
-    KEEP_YEARLY=0
 
     log_phase "Quelle-Pruning"
     prune_source_snapshots

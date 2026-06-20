@@ -86,7 +86,7 @@ Ergebnis: schön formatiertes JSON oder `UNGUELTIG: …`.
 - [ ] `--reset-statistics` **ohne** `--yes` → wird verweigert („--yes anhängen")
 - [ ] `--reset-statistics --yes` → ok
 - [ ] `--reset-run-status --yes` · `--delete-logs --yes`
-- [ ] ⚠️ `--thin-history --yes` → behält je aktivem Typ (Retention > 0) genau einen Anker (hourly/daily/weekly/monthly/yearly)
+- [ ] ⚠️ `--thin-history --yes` → erzeugt je aktivem Typ (Retention > 0) einen frischen Anker (hourly/daily/weekly/monthly/yearly), behält nur diese; direkt danach ~0 belegt
 - [ ] ⚠️ `--delete-managed-snapshots --yes` → löscht **alle** verwalteten Snapshots auf **Quelle und aktiven Zielen** (keine Datasets/Dateien)
 - [ ] Quell-Dataset löschen → normaler `--run`: Backups bleiben erhalten, Lauf **loggt** „verwaistes Ziel-Dataset" (löscht NICHTS automatisch)
 - [ ] `--cleanup-orphans` (ohne `--yes`) → Dry-Run, listet „WÜRDE LÖSCHEN …", löscht nichts

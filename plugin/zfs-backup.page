@@ -933,7 +933,7 @@ p.muted { color:#999; font-size:12px; }
               'Verwaiste Ziel-Datasets wirklich löschen? Das entfernt die Backups gelöschter Quell-Datasets unwiderruflich (lokal und remote).', true,
               'VERWAISTE LOESCHEN'));
   $mmd .= zb_ed_md('Historie ausdünnen',
-            'Behält je aktivem Typ (Retention > 0) genau einen Anker (hourly/daily/weekly/monthly/yearly), Ziele nachziehen. Ältere verwaltete Snapshots werden entfernt.',
+            'Erzeugt je aktivem Typ (Retention > 0) einen frischen Anker mit aktuellem Stand (hourly/daily/weekly/monthly/yearly), behält nur diese, Ziele nachziehen. Ältere verwaltete Snapshots werden entfernt.',
             zb_maint_btn('thin-history', 'Historie ausdünnen', 'Ausdünnen',
               'Snapshot-Historie wirklich ausdünnen? Ältere verwaltete Snapshots werden entfernt.', true));
   $mmd .= zb_ed_md('Verwaltete Snapshots löschen',

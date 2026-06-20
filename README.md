@@ -147,7 +147,7 @@ In der GUI unter **Wartung** mit getippter Bestätigung; optional je Ziel.
 ## Maintenance
 
 ```bash
-./zfs-backup.sh --thin-history --yes               # je aktivem Typ einen Anker behalten
+./zfs-backup.sh --thin-history --yes               # je aktivem Typ einen frischen Anker
 ./zfs-backup.sh --delete-managed-snapshots --yes   # alle verwalteten Snapshots löschen
 ./zfs-backup.sh --reset-statistics --yes
 ./zfs-backup.sh --reset-run-status --yes

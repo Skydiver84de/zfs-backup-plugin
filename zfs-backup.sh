@@ -3774,8 +3774,15 @@ remote_entry_size() {
 # <tmpd>. $1 ds, $2 snap, $3 rel, $4 tmpd. (Eigene Funktion, damit sie als ganze
 # Pipeline im Hintergrund laufen kann – siehe restore_copy_progress.)
 restore_remote_extract() {
+    # Hier ist der SSH-/Remote-stdout der DATENstrom (tar) – das Remote-Script
+    # schreibt ausschließlich `tar -cf -` auf stdout. tar validiert beim Entpacken
+    # den Header, eine verunreinigte Pipe bricht also ab (mit pipefail erkennbar);
+    # der Aufrufer prüft zusätzlich die Existenz des entpackten Eintrags. tar-stderr
+    # NICHT mehr verwerfen, sondern loggen, damit ein Fehlschlag diagnostizierbar
+    # ist (statt still in /dev/null zu verschwinden). log_stderr schreibt nur ins
+    # Logfile, verschmutzt also keinen stdout.
     printf '%s' "$SNAPSHOT_TAR_SCRIPT" | remote_snapshot_exec "$1" "$2" "$3" \
-        | tar -C "$4" -xf - 2>/dev/null
+        | tar -C "$4" -xf - 2> >(log_stderr "Restore-Extract")
 }
 
 # Führt das Kopier-Kommando <cmd…> im Hintergrund aus und meldet währenddessen

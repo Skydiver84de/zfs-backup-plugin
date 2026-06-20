@@ -1,6 +1,6 @@
 # Changelog
 
-## 2026.06.20 – Seeding, sortierbare Ziele, frische Ausdünn-Anker
+## 2026.06.20.r01 – Seeding, sortierbare Ziele, frische Ausdünn-Anker
 
 - **Snapshot-Seeding** legt wöchentliche, monatliche und jährliche Snapshots an,
   sobald die Periode noch keinen hat – nicht erst am Stichtag. Verpasste Stichtage

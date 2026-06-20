@@ -36,9 +36,14 @@ explizit übergebene Vollversion (`build.sh 2026.06.20.r01`) wird unverändert
 
 Annahme: Version `JJJJ.MM.TT.rNN` (z. B. `2026.06.21.r01`).
 
-1. **CHANGELOG-Kopf** `## JJJJ.MM.TT.rNN – <Stichwort>` ergänzen; `bash -n zfs-backup.sh`
-   prüfen, committen, pushen. (Die Version selbst wird **nicht** im Skript gesetzt —
-   `build.sh` stempelt sie beim Bauen.)
+1. **CHANGELOG-Abschnitt** `## JJJJ.MM.TT.rNN – <Stichwort>` ergänzen — **für jeden
+   Release UND jeden Hotfix** einen eigenen Abschnitt. Die Überschrift muss **exakt
+   der Build-Version** entsprechen (sie ist zugleich die Unraid-„Release notes" und
+   die GitHub-Release-Notiz). Auch ein kleiner Hotfix bekommt mindestens eine Zeile,
+   z. B. `## 2026.06.20.r02 – Hotfix: …`. Stil: fettes Stichwort + Fließtext, **kein**
+   Inline-Code/Backticks (Unraid rendert Markdown → Monospace wirkt uneinheitlich),
+   knapp gehalten. Dann `bash -n zfs-backup.sh` prüfen, committen, pushen. (Die
+   Version wird **nicht** im Skript gesetzt — `build.sh` stempelt sie beim Bauen.)
 
 2. **Auf Unraid** bauen:
    ```bash

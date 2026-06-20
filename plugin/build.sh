@@ -4,11 +4,12 @@
 # AUF UNRAID ausführen (nutzt makepkg aus Slackware). Ergebnis liegt neben
 # diesem Skript: zfs-backup-<version>.txz plus ausgegebene MD5-Summe.
 #
-#   bash plugin/build.sh                 # Release bauen (Version = heutiges Datum)
-#   bash plugin/build.sh 2026.06.11      # Release bauen, Version explizit
+#   bash plugin/build.sh                 # Release bauen -> <datum>.r01
+#   bash plugin/build.sh r02             # gleichtägiger Hotfix -> <datum>.r02
+#   bash plugin/build.sh 2026.06.11.r01  # Release bauen, Version explizit
 #   bash plugin/build.sh --install       # Test-Build bauen UND installieren
-#                                        #   -> Version "<datum>dev"; lässt die
-#                                        #      committeten Release-Artefakte
+#                                        #   -> Version "<datum>.<HHMM>dev"; lässt
+#                                        #      die committeten Release-Artefakte
 #                                        #      (plugin/packages, plugin/*.plg)
 #                                        #      bewusst unberührt
 #
@@ -20,8 +21,10 @@
 # So wird immer sauber neu installiert – ohne den `plugin install`-Befehl, der
 # eine gleiche Version ablehnen würde. Eine Datumsversion genügt daher.
 #
-# Die Plugin-/Paket-Version ist datumsbasiert (Unraid-Konvention für den
-# Update-Vergleich); die interne SCRIPT_VERSION im Skript ist davon getrennt.
+# Die Plugin-/Paket-Version ist datumsbasiert (Unraid-Konvention); das Schema
+# <datum>.r<NN> / <datum>.<HHMM>dev ist auf Unraids byteweisen strcmp-Vergleich
+# abgestimmt (siehe Versions-Block unten). SCRIPT_VERSION im Skript wird davon
+# beim Bauen gestempelt.
 
 set -euo pipefail
 
@@ -38,20 +41,33 @@ for arg in "$@"; do
         *)  VERSION="$arg" ;;
     esac
 done
-# Version: Release-Builds (ohne --install) sind datumsbasiert (Unraid-Konvention).
-# Test-/Sideload-Builds (--install ohne explizite Version) bekommen das Suffix
-# "dev" – sie sind bewusst KEIN offizieller Release und geben sich auch in der
-# Plugins-Übersicht als Teststand zu erkennen. Eine explizit übergebene Version
-# bleibt immer unverändert.
-if [ -n "$VERSION" ]; then
-    :
-elif [ "$DO_INSTALL" -eq 1 ]; then
-    # Dev-Build mit Uhrzeit (HHMM), damit mehrere Builds am selben Tag
-    # unterscheidbar bleiben, z. B. 2026.06.20.1810dev.
-    VERSION="$(date +%Y.%m.%d.%H%M)dev"
-else
-    VERSION="$(date +%Y.%m.%d)"
-fi
+# Version. Unraid vergleicht Plugin-Versionen byteweise mit strcmp (NICHT
+# version_compare – das gilt nur fürs OS). Das Schema ist darauf ausgelegt, dass
+# ein gleichtägiges Release/Hotfix einem Dev-Build als Update angeboten wird:
+#   Release (ohne --install, ohne Version)  -> <datum>.r01   (erstes Release/Tag)
+#   Hotfix  (Kurzform "rNN")                -> <datum>.rNN   (nullgepolstert)
+#   Dev     (--install, ohne Version)       -> <datum>.<HHMM>dev
+#   explizite Vollversion                   -> unverändert übernommen
+# Warum es passt: 'r' (0x72) ist im strcmp größer als jede Ziffer, und eine
+# Dev-HHMM beginnt mit 0–2 -> "<datum>.r01" schlägt jeden "<datum>.HHMMdev".
+# Hotfixes zählen sauber hoch (r01 < r02 < …, durch Nullpolsterung auch r09 < r10).
+# Das Datum dominiert über Tage hinweg.
+today="$(date +%Y.%m.%d)"
+case "$VERSION" in
+    "")
+        if [ "$DO_INSTALL" -eq 1 ]; then
+            VERSION="${today}.$(date +%H%M)dev"
+        else
+            VERSION="${today}.r01"
+        fi
+        ;;
+    r[0-9]|r[0-9][0-9]|r[0-9][0-9][0-9])
+        # Kurzform "rNN" -> heutiges Datum + nullgepolsterte Revision. 10# erzwingt
+        # Basis 10, damit führende Nullen (r08) nicht als Oktal gelesen werden.
+        VERSION="${today}.r$(printf '%02d' "$((10#${VERSION#r}))")"
+        ;;
+    # sonst: vollständige, explizit übergebene Version unverändert lassen
+esac
 
 command -v makepkg >/dev/null 2>&1 || {
     echo "FEHLER: makepkg nicht gefunden – dieses Skript auf Unraid ausführen." >&2
@@ -212,8 +228,8 @@ else
     echo "A) Lokal bauen UND installieren (Sideload, zum Testen):"
     echo "   bash plugin/build.sh --install"
     echo
-    echo "B) Öffentlichen Release veröffentlichen (Datums-Version, hier ${VERSION}):"
-    echo "   1. bash plugin/build.sh            # nimmt das heutige Datum"
+    echo "B) Öffentlichen Release veröffentlichen (hier ${VERSION}):"
+    echo "   1. bash plugin/build.sh            # <datum>.r01 (Hotfix: build.sh r02)"
     echo "   2. git add -A plugin/packages plugin/${PLUGIN_NAME}.plg"
     echo "   3. git commit -m \"release: ${VERSION}\" && git push"
     echo "   Danach in Unraid installierbar über die .plg-URL:"

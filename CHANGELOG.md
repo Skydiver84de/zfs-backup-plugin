@@ -1,6 +1,6 @@
 # Changelog
 
-## Unveröffentlicht
+## 2026.06.20 – Seeding, sortierbare Ziele, frische Ausdünn-Anker
 
 - **Live-Fortschritt bei Wartungsaktionen:** Gestreamte GUI-Aktionen (Ausdünnen,
   Verify u. a.) zeigen jetzt den Schritt-für-Schritt-Fortschritt (Pro-Dataset-

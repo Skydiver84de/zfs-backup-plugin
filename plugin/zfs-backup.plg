@@ -3,8 +3,8 @@
 <!DOCTYPE PLUGIN [
 <!ENTITY name      "zfs-backup">
 <!ENTITY author    "Skydiver84de">
-<!ENTITY version   "2026.06.18">
-<!ENTITY md5       "fe84eb2be6e1de4c8e206d095664c29b">
+<!ENTITY version   "2026.06.20">
+<!ENTITY md5       "adfcf1dfa87b4a901047243a522c7de4">
 <!ENTITY plugdir   "/boot/config/plugins/&name;">
 <!ENTITY emhttp    "/usr/local/emhttp/plugins/&name;">
 <!ENTITY giturl    "https://raw.githubusercontent.com/Skydiver84de/zfs-backup-plugin/main">
@@ -29,11 +29,57 @@
         support="https://github.com/Skydiver84de/zfs-backup-plugin">
 
 <CHANGES>
-### &version;
-- Erstes öffentliches Release: Headless ZFS-Backup-Framework als Unraid-Plugin
-  mit Web-GUI – Snapshots, lokale und Remote-Replikation, Pruning, Verify,
-  Datei-/Ordner-/Snapshot-Restore, Zeitplan, Dashboard-Kachel und native
-  Unraid-Benachrichtigungen.
+<![CDATA[
+
+## 2026.06.20 – Seeding, sortierbare Ziele, frische Ausdünn-Anker
+
+- **Live-Fortschritt bei Wartungsaktionen:** Gestreamte GUI-Aktionen (Ausdünnen,
+  Verify u. a.) zeigen jetzt den Schritt-für-Schritt-Fortschritt (Pro-Dataset-
+  Status) im Ausgabe-Stream – vorher nur die Phasen-Überschriften. Grund war,
+  dass die Statuszeile nur auf ein echtes Terminal geschrieben wurde. Bei
+  größeren Übertragungen kommt zusätzlich alle 25 % eine Fortschrittszeile.
+
+- **Ausdünnen erzeugt frische Anker je Typ:** `--thin-history` reduziert die
+  Historie nicht mehr auf einen einzelnen Daily, sondern erzeugt je aktivem
+  Snapshot-Typ (Retention > 0) einen **frischen** Anker mit aktuellem Stand
+  (hourly/daily/weekly/monthly/yearly) und behält nur diese. So bleibt der tiefe
+  Anker (z. B. yearly) erhalten — wichtig fürs Reaktivierungs-Fenster
+  deaktivierter Ziele — und direkt nach dem Ausdünnen ist der belegte Platz
+  minimal (die Anker spiegeln den Live-Stand, maximaler Platz-Reclaim).
+
+- **Snapshot-Seeding:** Wöchentliche, monatliche und jährliche Snapshots werden
+  nicht mehr nur am Kalenderstichtag (So. / 1. des Monats / 1.1.) erstellt,
+  sondern sobald für die aktuelle Periode (ISO-Woche/Monat/Jahr) noch keiner
+  existiert. Der Erstlauf legt damit sofort alle Stufen an (tiefer Anker ab
+  Tag 1), und ein verpasster Stichtag (z. B. Server am 1.1. aus) heilt sich beim
+  nächsten Lauf selbst.
+- **Ziel-Reihenfolge:** Neue Befehle `--reorder-targets <id,id,...>` und
+  `--move-target <id> <up|down>` legen die Backup-Reihenfolge der Ziele fest
+  (erstes Ziel zuerst). Grundlage für das Sortieren der Ziele in der GUI.
+
+## 2026.06.18 – Erstes Release
+
+Erstes Release. ZFS-Backup-Framework für Unraid als natives Plugin mit Web-GUI.
+
+- **Snapshots** je Typ (stündlich, täglich, wöchentlich, monatlich, jährlich) mit
+  konfigurierbarer Aufbewahrung. Die Quelle ist maßgeblich; aktive Ziele werden an
+  ihren verwalteten Snapshot-Bestand angeglichen.
+- **Replikation** lokal und auf einen Remote-Host (SSH, Wake-on-LAN, fortsetzbare
+  Übertragungen). Pruning und Verify (nur lesend).
+- **Restore** von Datei, Ordner oder ganzem Snapshot – aus der Quelle und aus
+  Replikaten (lokal/remote). Nicht destruktiv in einen `_restore`-Ordner, mit
+  Fortschrittsanzeige. Anleitung für die vollständige Dataset-Wiederherstellung in
+  der README.
+- **Verwaiste Ziel-Datasets** werden erkannt und gemeldet, aber nie automatisch
+  gelöscht; Aufräumen nur manuell mit Bestätigung.
+- **Web-GUI** (Settings → ZFS Backup): Status mit „Lauf starten" und „Simulieren",
+  Kapazitätsanzeige, Veraltet-Warnung, Konfiguration, Ziele, Snapshots mit
+  Datei-Browser, Wartung, Logs (live) und Zeitplan (Cron).
+- **Dashboard-Kachel** mit Kurzstatus auf der Unraid-Hauptseite.
+- **Benachrichtigungen** über die native Unraid-Notification-Zentrale, je Ereignis
+  abstufbar, plus Wächter gegen stillen Ausfall.
+- **Headless-CLI** (`zfs-backup --help`) mit JSON-Ausgaben für alle Lese-Befehle.
+]]>
 </CHANGES>
 
 <!-- 1. Paket aus dem Repo laden (Unraid lädt die URL nach Name und prüft MD5). -->

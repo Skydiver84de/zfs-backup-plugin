@@ -29,11 +29,7 @@
         support="https://github.com/Skydiver84de/zfs-backup-plugin">
 
 <CHANGES>
-### &version;
-- Erstes öffentliches Release: Headless ZFS-Backup-Framework als Unraid-Plugin
-  mit Web-GUI – Snapshots, lokale und Remote-Replikation, Pruning, Verify,
-  Datei-/Ordner-/Snapshot-Restore, Zeitplan, Dashboard-Kachel und native
-  Unraid-Benachrichtigungen.
+@CHANGELOG@
 </CHANGES>
 
 <!-- 1. Paket aus dem Repo laden (Unraid lädt die URL nach Name und prüft MD5). -->

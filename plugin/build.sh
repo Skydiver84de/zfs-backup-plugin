@@ -46,7 +46,9 @@ done
 if [ -n "$VERSION" ]; then
     :
 elif [ "$DO_INSTALL" -eq 1 ]; then
-    VERSION="$(date +%Y.%m.%d)dev"
+    # Dev-Build mit Uhrzeit (HHMM), damit mehrere Builds am selben Tag
+    # unterscheidbar bleiben, z. B. 2026.06.20.1810dev.
+    VERSION="$(date +%Y.%m.%d.%H%M)dev"
 else
     VERSION="$(date +%Y.%m.%d)"
 fi
@@ -137,6 +139,16 @@ if [ -f "$PLG_IN" ]; then
         -e "s|<!ENTITY version[[:space:]]*\"[^\"]*\">|<!ENTITY version   \"${VERSION}\">|" \
         -e "s|<!ENTITY md5[[:space:]]*\"[^\"]*\">|<!ENTITY md5       \"${MD5}\">|" \
         "$PLG_IN" > "$PLG"
+    # Marker @CHANGELOG@ im <CHANGES>-Block durch das aktuelle CHANGELOG.md ersetzen
+    # (ohne die "# Changelog"-Titelzeile). So zeigt die Plugins-Seite immer den
+    # passenden Changelog – beim Dev-Build also den Abschnitt "Unveröffentlicht".
+    if [ -f "$REPO_DIR/CHANGELOG.md" ]; then
+        tail -n +2 "$REPO_DIR/CHANGELOG.md" > "$STAGE/changes.md"
+        awk -v f="$STAGE/changes.md" '
+            /@CHANGELOG@/ { while ((getline line < f) > 0) print line; next }
+            { print }
+        ' "$PLG" > "$PLG.tmp" && mv "$PLG.tmp" "$PLG"
+    fi
 fi
 
 # Für den öffentlichen Release: das gebaute Paket nach plugin/packages/ legen

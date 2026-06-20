@@ -14,6 +14,14 @@ steht in `SCRIPT_VERSION` (`zfs-backup.sh`), im CHANGELOG-Kopf, im `.plg` und im
 `plugin/build.sh` nutzt `makepkg` und läuft **nur auf Unraid** (nicht auf macOS).
 Ohne Argument nimmt es automatisch das heutige Datum als Version.
 
+**Test- vs. Release-Build:** `build.sh --install` (lokaler Sideload zum Testen)
+erzeugt eine Version mit Suffix `dev` (z. B. `2026.06.20dev`) und lässt die
+committeten Release-Artefakte (`plugin/packages/`, `plugin/zfs-backup.plg`)
+**unberührt** – ein Teststand kann so nie versehentlich als Release committet
+werden. Nur der Release-Build (`build.sh` **ohne** `--install`) schreibt eine
+saubere Datums-Version in diese Dateien. Eine explizit übergebene Version
+(`build.sh 2026.06.20`) wird immer unverändert übernommen.
+
 ## Schritte
 
 Annahme: Version `JJJJ.MM.TT`.

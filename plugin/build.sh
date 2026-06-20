@@ -4,9 +4,13 @@
 # AUF UNRAID ausführen (nutzt makepkg aus Slackware). Ergebnis liegt neben
 # diesem Skript: zfs-backup-<version>.txz plus ausgegebene MD5-Summe.
 #
-#   bash plugin/build.sh                 # nur bauen (Version = heutiges Datum)
-#   bash plugin/build.sh 2026.06.11      # nur bauen, Version explizit
-#   bash plugin/build.sh --install       # bauen UND direkt installieren
+#   bash plugin/build.sh                 # Release bauen (Version = heutiges Datum)
+#   bash plugin/build.sh 2026.06.11      # Release bauen, Version explizit
+#   bash plugin/build.sh --install       # Test-Build bauen UND installieren
+#                                        #   -> Version "<datum>dev"; lässt die
+#                                        #      committeten Release-Artefakte
+#                                        #      (plugin/packages, plugin/*.plg)
+#                                        #      bewusst unberührt
 #
 # Mit --install entfällt das manuelle Kopieren/Installieren. Ablauf:
 #   1. vorhandene Installation entfernen (removepkg) – Config/Runtime bleiben,
@@ -34,7 +38,18 @@ for arg in "$@"; do
         *)  VERSION="$arg" ;;
     esac
 done
-VERSION="${VERSION:-$(date +%Y.%m.%d)}"
+# Version: Release-Builds (ohne --install) sind datumsbasiert (Unraid-Konvention).
+# Test-/Sideload-Builds (--install ohne explizite Version) bekommen das Suffix
+# "dev" – sie sind bewusst KEIN offizieller Release und geben sich auch in der
+# Plugins-Übersicht als Teststand zu erkennen. Eine explizit übergebene Version
+# bleibt immer unverändert.
+if [ -n "$VERSION" ]; then
+    :
+elif [ "$DO_INSTALL" -eq 1 ]; then
+    VERSION="$(date +%Y.%m.%d)dev"
+else
+    VERSION="$(date +%Y.%m.%d)"
+fi
 
 command -v makepkg >/dev/null 2>&1 || {
     echo "FEHLER: makepkg nicht gefunden – dieses Skript auf Unraid ausführen." >&2
@@ -104,7 +119,14 @@ MD5="$(md5sum "$OUT" | awk '{print $1}')"
 # Vorlage bleibt unverändert (kein git-Konflikt); das erzeugte .plg ist
 # gitignored.
 PLG_IN="$SELF_DIR/${PLUGIN_NAME}.plg.in"
-PLG="$SELF_DIR/${PLUGIN_NAME}.plg"
+# Release-Build -> committete plugin/zfs-backup.plg erzeugen. Test-/Sideload-Build
+# -> ephemere .plg im Stage-Verzeichnis, damit die versionierte .plg unberührt
+# bleibt (ein Dev-Stand darf nie versehentlich als Release committet werden).
+if [ "$DO_INSTALL" -eq 1 ]; then
+    PLG="$STAGE/${PLUGIN_NAME}.plg"
+else
+    PLG="$SELF_DIR/${PLUGIN_NAME}.plg"
+fi
 if [ -f "$PLG_IN" ]; then
     sed \
         -e "s|<!ENTITY version[[:space:]]*\"[^\"]*\">|<!ENTITY version   \"${VERSION}\">|" \
@@ -115,13 +137,22 @@ fi
 # Für den öffentlichen Release: das gebaute Paket nach plugin/packages/ legen
 # (von dort lädt es das .plg per raw-URL; dieser Ordner wird committet). Alte
 # Pakete dort entfernen, damit immer nur die aktuelle Version im Repo liegt.
+# Test-/Sideload-Builds (--install) lassen plugin/packages/ unberührt – sie
+# sollen die committeten Release-Artefakte nicht überschreiben.
 PKG_DIR="$SELF_DIR/packages"
-mkdir -p "$PKG_DIR"
-rm -f "$PKG_DIR"/${PLUGIN_NAME}-*.txz
-cp -f "$OUT" "$PKG_DIR/"
+if [ "$DO_INSTALL" -eq 0 ]; then
+    mkdir -p "$PKG_DIR"
+    rm -f "$PKG_DIR"/${PLUGIN_NAME}-*.txz
+    cp -f "$OUT" "$PKG_DIR/"
+fi
 
 echo "Paket : $OUT"
-echo "        -> $PKG_DIR/$(basename "$OUT") (fürs Repo/Release)"
+[ "$DO_INSTALL" -eq 0 ] && echo "        -> $PKG_DIR/$(basename "$OUT") (fürs Repo/Release)"
+if [ "$DO_INSTALL" -eq 1 ]; then
+    echo "Version: $VERSION  (Test-/Sideload-Build, kein offizieller Release)"
+else
+    echo "Version: $VERSION"
+fi
 echo "MD5   : $MD5"
 echo "Größe : $(du -h "$OUT" | awk '{print $1}')"
 [ -f "$PLG" ] && echo "PLG   : $PLG (Version + MD5 eingetragen)"

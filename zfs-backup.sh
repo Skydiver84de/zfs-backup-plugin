@@ -927,6 +927,19 @@ target_move() {
     target_reorder "${joined%,}"
 }
 
+# Ziel-Labels in aktueller Reihenfolge als kommagetrennte Liste (für sprechende
+# Reihenfolge-Meldungen statt nackter IDs, die nach dem Umsortieren ohnehin nur
+# der Position entsprechen).
+targets_label_order() {
+    local target_id first=1 out=""
+
+    for target_id in "${TARGETS[@]}"; do
+        if [ "$first" -eq 1 ]; then first=0; else out+=", "; fi
+        out+="$(target_get "$target_id" LABEL "$target_id")"
+    done
+    printf '%s' "$out"
+}
+
 # Setzt ein einzelnes Feld eines bestehenden Ziels (prompt-frei). Kern für
 # --edit-target. Feld-Whitelist (schützt die CLI vor
 # beliebigen Feldern) plus feldspezifische Validierung über
@@ -7025,7 +7038,7 @@ handle_cli() {
                 exit 1
             fi
             if target_reorder "${CLI_ARGS[1]}"; then
-                console_success "Reihenfolge gespeichert: ${TARGETS[*]}"
+                console_success "Reihenfolge gespeichert: $(targets_label_order)"
                 exit 0
             fi
             exit 1
@@ -7038,7 +7051,7 @@ handle_cli() {
                 exit 1
             fi
             if target_move "${CLI_ARGS[1]}" "${CLI_ARGS[2]}"; then
-                console_success "Ziel verschoben: neue Reihenfolge ${TARGETS[*]}"
+                console_success "Ziel verschoben. Neue Reihenfolge: $(targets_label_order)"
                 exit 0
             fi
             exit 1

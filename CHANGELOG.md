@@ -2,29 +2,18 @@
 
 ## 2026.06.20 – Seeding, sortierbare Ziele, frische Ausdünn-Anker
 
-- **Live-Fortschritt bei Wartungsaktionen:** Gestreamte GUI-Aktionen (Ausdünnen,
-  Verify u. a.) zeigen jetzt den Schritt-für-Schritt-Fortschritt (Pro-Dataset-
-  Status) im Ausgabe-Stream – vorher nur die Phasen-Überschriften. Grund war,
-  dass die Statuszeile nur auf ein echtes Terminal geschrieben wurde. Bei
-  größeren Übertragungen kommt zusätzlich alle 25 % eine Fortschrittszeile.
-
-- **Ausdünnen erzeugt frische Anker je Typ:** `--thin-history` reduziert die
-  Historie nicht mehr auf einen einzelnen Daily, sondern erzeugt je aktivem
-  Snapshot-Typ (Retention > 0) einen **frischen** Anker mit aktuellem Stand
-  (hourly/daily/weekly/monthly/yearly) und behält nur diese. So bleibt der tiefe
-  Anker (z. B. yearly) erhalten — wichtig fürs Reaktivierungs-Fenster
-  deaktivierter Ziele — und direkt nach dem Ausdünnen ist der belegte Platz
-  minimal (die Anker spiegeln den Live-Stand, maximaler Platz-Reclaim).
-
-- **Snapshot-Seeding:** Wöchentliche, monatliche und jährliche Snapshots werden
-  nicht mehr nur am Kalenderstichtag (So. / 1. des Monats / 1.1.) erstellt,
-  sondern sobald für die aktuelle Periode (ISO-Woche/Monat/Jahr) noch keiner
-  existiert. Der Erstlauf legt damit sofort alle Stufen an (tiefer Anker ab
-  Tag 1), und ein verpasster Stichtag (z. B. Server am 1.1. aus) heilt sich beim
-  nächsten Lauf selbst.
-- **Ziel-Reihenfolge:** Neue Befehle `--reorder-targets <id,id,...>` und
-  `--move-target <id> <up|down>` legen die Backup-Reihenfolge der Ziele fest
-  (erstes Ziel zuerst). Grundlage für das Sortieren der Ziele in der GUI.
+- **Snapshot-Seeding** legt wöchentliche, monatliche und jährliche Snapshots an,
+  sobald die Periode noch keinen hat – nicht erst am Stichtag. Verpasste Stichtage
+  (Server aus) heilen sich beim nächsten Lauf selbst.
+- **Sortierbare Ziele:** die Backup-Reihenfolge lässt sich festlegen – per CLI und
+  mit Auf/Ab-Buttons in der GUI.
+- **Ausdünnen mit frischen Ankern** behält je aktivem Typ einen frischen Anker
+  statt nur einem Daily. Der tiefe Jahres-Anker bleibt erhalten, der belegte Platz
+  ist danach minimal.
+- **Mehr Live-Fortschritt:** Wartungsaktionen zeigen den Fortschritt jetzt Schritt
+  für Schritt, bei größeren Übertragungen zusätzlich in 25-%-Schritten.
+- **Snapshots nach Typ gruppiert** in der GUI, plus diverse Status- und
+  Anzeige-Verbesserungen.
 
 ## 2026.06.18 – Erstes Release
 

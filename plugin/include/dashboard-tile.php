@@ -84,7 +84,9 @@ if (!function_exists('zfs_backup_dashboard_tile')) {
             $invHtml = $total . ($total > 0 ? ' <span class="grey-text">(' . implode(' · ', $parts) . ')</span>' : '');
 
             $rows .= $row('Letzter Lauf', $h($lr['timestamp'] ?? null) . ' &nbsp;' . $res . $rt);
-            $rows .= $row('Letzter Erfolg', $h($st['last_success'] ?? null));
+            // "Letzter Erfolg" nur zeigen, wenn der letzte Lauf KEIN Erfolg war –
+            // sonst wäre es mit dem Zeitpunkt oben redundant.
+            if ($result !== 'ERFOLG') $rows .= $row('Letzter Erfolg', $h($st['last_success'] ?? null));
             $rows .= $row('Datasets', $dsc . ' gesichert');
             $rows .= $row('Snapshots (Quelle)', $invHtml);
             $rows .= $row('Aktive Ziele', (int)($tg['local_active'] ?? 0) . ' lokal &middot; ' . (int)($tg['remote_active'] ?? 0) . ' remote');

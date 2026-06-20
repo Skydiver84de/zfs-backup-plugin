@@ -466,8 +466,10 @@ p.muted { color:#999; font-size:12px; }
   $tg      = $st['targets']    ?? [];
   $orphans = (int)($st['orphan_datasets'] ?? 0);
   $result  = $lr['result']     ?? '-';
-  $resOk   = ($result === 'success' || $result === 'Erfolg');
-  $resErr  = ($result === 'error'   || $result === 'Fehler');
+  // Lauf-Ergebnis ist "ERFOLG"/"FEHLER" (siehe zfs-backup.sh) – exakt so prüfen,
+  // sonst greift weder das grüne/rote Badge noch die Ergebnis-abhängige Anzeige.
+  $resOk   = ($result === 'ERFOLG');
+  $resErr  = ($result === 'FEHLER');
 ?>
 
   <?php
@@ -527,7 +529,9 @@ p.muted { color:#999; font-size:12px; }
           <?php else: ?><?= zb_h($result) ?><?php endif; ?>
         </td></tr>
         <tr><td class="k">Dauer</td><td class="v"><?= zb_h($lr['runtime_human'] ?? null) ?></td></tr>
+        <?php if (!$resOk): /* "Letzter Erfolg" nur bei nicht erfolgreichem letzten Lauf – sonst redundant zum Zeitpunkt oben */ ?>
         <tr><td class="k">Letzter Erfolg</td><td class="v"><?= zb_h($st['last_success'] ?? null) ?></td></tr>
+        <?php endif; ?>
         <?php if (!empty($st['last_error']) && $st['last_error'] !== '-'): ?>
         <tr><td class="k">Letzter Fehler</td><td class="v"><?= zb_h($st['last_error']) ?></td></tr>
         <?php endif; ?>

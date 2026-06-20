@@ -317,6 +317,17 @@ transfer_progress_from_pv() {
     local empty
     local bar_done
     local bar_todo
+    local milestone
+    local last_milestone=0
+    local stream_milestones=0
+
+    # Ohne Terminal (gestreamte GUI-Wartung wie Ausdünnen) zeigt die /dev/tty-
+    # Leiste von console_stream_status nichts. Dann alle 25 % EINE Zeile ausgeben,
+    # damit der Fortschritt großer Übertragungen sichtbar ist (ohne zu fluten).
+    # WICHTIG: Ausgabe auf stderr (fd 2), NIEMALS stdout – im Send-Pipeline-Kontext
+    # ist stdout der zfs-recv-Datenstrom (Schreiben dorthin korrumpiert das Backup).
+    # stderr bleibt der Skript-stderr; maintenance.php streamt ihn via 2>&1 mit.
+    [ ! -t 2 ] && stream_milestones=1
 
     compact_label=$(compact_transfer_label "$label")
 
@@ -340,6 +351,15 @@ transfer_progress_from_pv() {
             console_stream_status "Übertragung: ${compact_label} ${percent_int}% [${bar_done}${bar_todo}] $(format_bytes "$size")"
         else
             console_stream_status "Übertragung: ${compact_label} ${percent_int}% [${bar_done}${bar_todo}]"
+        fi
+
+        if [ "$stream_milestones" = 1 ]; then
+            milestone=$((percent_int/25))
+            if [ "$milestone" -gt "$last_milestone" ]; then
+                last_milestone="$milestone"
+                printf "[%s] • Übertragung: %s %d%%\n" \
+                    "$(date '+%d.%m.%Y %H:%M:%S')" "$compact_label" "$percent_int" >&2
+            fi
         fi
     done
 }

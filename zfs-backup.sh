@@ -160,13 +160,19 @@ console_status() {
 
     write_progress_detail "$msg"    # auch headless: Unterschritt für die GUI
 
-    [ -t 1 ] || return
-
-    console_color "0;36"
-    printf "\r[%s] • " "$(date '+%d.%m.%Y %H:%M:%S')"
-    console_reset
-    printf "%s\033[K" "$msg"
-    CONSOLE_STATUS_ACTIVE=1
+    if [ -t 1 ]; then
+        # Interaktives Terminal: Statuszeile per \r an Ort und Stelle überschreiben.
+        console_color "0;36"
+        printf "\r[%s] • " "$(date '+%d.%m.%Y %H:%M:%S')"
+        console_reset
+        printf "%s\033[K" "$msg"
+        CONSOLE_STATUS_ACTIVE=1
+    else
+        # Kein TTY (z. B. gestreamte GUI-Wartung wie Ausdünnen/Verify): als
+        # vollständige Zeile ausgeben, damit der Fortschritt im Stream sichtbar
+        # ist – ähnlich wie der Live-Status eines normalen Laufs.
+        printf "[%s] • %s\n" "$(date '+%d.%m.%Y %H:%M:%S')" "$msg"
+    fi
 }
 
 console_phase() {

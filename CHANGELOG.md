@@ -2,6 +2,11 @@
 
 ## Unveröffentlicht
 
+- **Live-Fortschritt bei Wartungsaktionen:** Gestreamte GUI-Aktionen (Ausdünnen,
+  Verify u. a.) zeigen jetzt den Schritt-für-Schritt-Fortschritt (Pro-Dataset-
+  Status) im Ausgabe-Stream – vorher nur die Phasen-Überschriften. Grund war,
+  dass die Statuszeile nur auf ein echtes Terminal geschrieben wurde.
+
 - **Ausdünnen erzeugt frische Anker je Typ:** `--thin-history` reduziert die
   Historie nicht mehr auf einen einzelnen Daily, sondern erzeugt je aktivem
   Snapshot-Typ (Retention > 0) einen **frischen** Anker mit aktuellem Stand

@@ -67,6 +67,14 @@ trap 'rm -rf "$STAGE"' EXIT
 DEST="$STAGE/usr/local/emhttp/plugins/$PLUGIN_NAME"
 mkdir -p "$DEST"
 install -m 0755 "$REPO_DIR/zfs-backup.sh" "$DEST/zfs-backup.sh"
+# Test-/Sideload-Build (--install): die installierte Kopie mit der Paket-Version
+# stempeln, damit `zfs-backup --version` den tatsaechlich installierten Stand
+# zeigt (z. B. 2026.06.20dev) statt der zuletzt committeten SCRIPT_VERSION. Die
+# Repo-Datei bleibt unberuehrt; Release-Builds (ohne --install) nutzen weiterhin
+# die manuell gepflegte SCRIPT_VERSION als einzige Versionsquelle.
+if [ "$DO_INSTALL" -eq 1 ]; then
+    sed -i 's/^SCRIPT_VERSION=.*/SCRIPT_VERSION="'"$VERSION"'"/' "$DEST/zfs-backup.sh"
+fi
 install -m 0755 "$SELF_DIR/install.sh"    "$DEST/install.sh"
 install -m 0755 "$SELF_DIR/uninstall.sh"  "$DEST/uninstall.sh"
 install -m 0755 "$SELF_DIR/schedule.sh"   "$DEST/schedule.sh"

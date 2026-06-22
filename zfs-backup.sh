@@ -7312,6 +7312,112 @@ verify_remote_phase() {
     return "$errors"
 }
 
+# Verify eines borg-Ziels für ein Dataset (rein meldend, ändert nichts). Pendant zu
+# verify_remote_dataset: fehlende Archive (je verwaltetem Quell-Snapshot) und
+# zusätzliche Archive (im Namespace ohne Quell-Snapshot). Neuestes fehlendes Archiv
+# = Fehler, historisches = Warnung. Setzt einen geladenen borg-Kontext + geladene
+# Archivliste (borg_load_existing_archives) voraus.
+verify_borg_dataset() {
+    local source_ds="$1"
+    local snap name latest archive prefix errors=0
+    local present="|"
+
+    [ "$ENABLE_BORG_REPLICATION" = "yes" ] || return 0
+    latest=$(latest_backup_snapshot_name "$source_ds")
+    prefix=$(borg_dataset_prefix "$source_ds")
+
+    # Fehlende Archive je verwaltetem Quell-Snapshot.
+    while read -r snap; do
+        name="${snap#*@}"
+        [ -n "$name" ] || continue
+        present="${present}${name}|"
+        archive=$(borg_archive_name "$source_ds" "$name")
+        if ! borg_archive_exists "$archive"; then
+            ((VERIFY_MISSING++))
+            if [ "$name" = "$latest" ]; then
+                log "Verify Borg: neuestes Archiv fehlt: ${archive}"
+                ((errors++))
+            else
+                log "Verify Borg: historisches Archiv fehlt: ${archive}"
+                ((VERIFY_WARNINGS++))
+            fi
+        fi
+    done < <(list_backup_snapshots "$source_ds")
+
+    # Zusätzliche Archive im Namespace ohne (aktuellen) Quell-Snapshot.
+    while IFS= read -r archive; do
+        [ -n "$archive" ] || continue
+        case "$archive" in "${prefix}"*) ;; *) continue ;; esac
+        name="${archive#"${prefix}"}"
+        case "$present" in *"|${name}|"*) continue ;; esac
+        log "Verify Borg: zusätzliches Archiv (kein Quell-Snapshot): ${archive}"
+        ((VERIFY_EXTRA++))
+        ((errors++))
+    done < <(printf '%s\n' "$BORG_EXISTING_ARCHIVES" | tr '|' '\n')
+
+    [ "$errors" -eq 0 ]
+}
+
+# Verify-Phase über alle (oder ein) borg-Ziel(e). $1 = repair (ignoriert – Verify
+# meldet nur, das Angleichen macht der normale Lauf), $2 = nur diese Ziel-ID.
+verify_borg_phase() {
+    local _repair="${1:-no}"
+    local only_target="${2:-}"
+    local ds target_id index=0 total=0 checked=0 errors=0
+    local warnings missing extra
+    local -a datasets_list
+
+    mapfile -t datasets_list < <(get_datasets)
+    total=${#datasets_list[@]}
+
+    if [ "$(target_enabled_count borg)" -eq 0 ]; then
+        console_warn "Verify Borg übersprungen: kein aktives borg-Ziel"
+        return 0
+    fi
+
+    log_phase "Verify Borg"
+    VERIFY_WARNINGS=0
+    VERIFY_REPAIRS=0
+    VERIFY_MISSING=0
+    VERIFY_EXTRA=0
+
+    for target_id in "${TARGETS[@]}"; do
+        target_enabled "$target_id" || continue
+        [ "$(target_type "$target_id")" = "borg" ] || continue
+        [ -n "$only_target" ] && [ "$target_id" != "$only_target" ] && continue
+        load_target_context "$target_id" || continue
+
+        if ! borg_ensure_binary || ! borg_run info >/dev/null 2>&1; then
+            console_error "Borg-Repo nicht erreichbar: $BORG_REPO"
+            ((errors++))
+            continue
+        fi
+        borg_load_existing_archives
+
+        index=0
+        for ds in "${datasets_list[@]}"; do
+            [ -n "$ds" ] || continue
+            ((index++))
+            console_status "Verify Borg $(target_label "$target_id") [${index}/${total}]: $ds"
+            verify_source_dataset "$ds" no no || continue
+            ((checked++))
+            verify_borg_dataset "$ds" || ((errors++))
+        done
+    done
+
+    console_clear_status
+    warnings="$VERIFY_WARNINGS"
+    missing="$VERIFY_MISSING"
+    extra="$VERIFY_EXTRA"
+    if [ "$errors" -eq 0 ]; then
+        console_success "Verify Borg abgeschlossen: ${checked} geprüft, ${missing} fehlend, ${extra} extra, ${warnings} Warnung(en), keine Fehler"
+    else
+        console_error "Verify Borg abgeschlossen: ${checked} geprüft, ${missing} fehlend, ${extra} extra, ${warnings} Warnung(en), ${errors} Fehler"
+    fi
+
+    return "$errors"
+}
+
 verify() {
     local scope="${1:-all}"
     local repair="${2:-no}"
@@ -7341,6 +7447,7 @@ verify() {
             verify_source_phase "$repair" || errors=$((errors+$?))
             verify_local_phase "$repair" || errors=$((errors+$?))
             verify_remote_phase "$repair" || errors=$((errors+$?))
+            verify_borg_phase "$repair" || errors=$((errors+$?))
             ;;
         source)
             verify_source_phase "$repair" || errors=$((errors+$?))
@@ -7351,12 +7458,16 @@ verify() {
         remote)
             verify_remote_phase "$repair" || errors=$((errors+$?))
             ;;
+        borg)
+            verify_borg_phase "$repair" || errors=$((errors+$?))
+            ;;
         *)
             # Einzelnes Ziel (Ziel-ID als Bereich): passende Phase mit Filter.
             if target_array_contains "$scope"; then
                 case "$(target_type "$scope")" in
                     local)  verify_local_phase  "$repair" "$scope" || errors=$((errors+$?)) ;;
                     remote) verify_remote_phase "$repair" "$scope" || errors=$((errors+$?)) ;;
+                    borg)   verify_borg_phase   "$repair" "$scope" || errors=$((errors+$?)) ;;
                     *) console_error "Unbekannter Zieltyp: $scope"; return 1 ;;
                 esac
             else
@@ -7579,8 +7690,12 @@ Verwendung:
   zfs-backup.sh --verify-remote-repair
       Kompatibilitätsalias für --verify-remote
 
+  zfs-backup.sh --verify-borg
+      Borg-Ziele prüfen: je verwaltetem Snapshot das Archiv und zusätzliche
+      Archive (meldend, ändert nichts).
+
   zfs-backup.sh --verify-target <ziel-id>
-      Nur die Snapshots eines einzelnen Ziels prüfen
+      Nur die Snapshots eines einzelnen Ziels prüfen (lokal/remote/borg)
 
   zfs-backup.sh --verbose --run
       Detailausgabe zusätzlich zum Logfile anzeigen
@@ -8198,6 +8313,12 @@ handle_cli() {
         --verify-remote-repair)
 
             verify remote no no
+            exit $?
+            ;;
+
+        --verify-borg)
+
+            verify borg no no
             exit $?
             ;;
 

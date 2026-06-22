@@ -14,7 +14,7 @@ _zfs_backup() {
         --snapshot-ls --snapshot-cat --capacity --targets \
         --add-target --edit-target --delete-target --test-target \
         --reorder-targets --move-target --borg-providers --borg-archives \
-        --verify --verify-source --verify-local --verify-remote \
+        --verify --verify-source --verify-local --verify-remote --verify-borg \
         --reset-statistics --reset-run-status --delete-logs \
         --thin-history --delete-managed-snapshots \
         --json --yes"

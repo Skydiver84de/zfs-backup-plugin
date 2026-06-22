@@ -2434,6 +2434,27 @@ simulate() {
         echo "  $ds"
     done
 
+    # Ziele einmal vorab bereitmachen, damit der pro-Dataset-Zielabgleich echte
+    # Zahlen liefert: Remote-Ziele wecken (Wake-on-LAN), Borg-Repos prüfen. Nicht
+    # erreichbare Ziele in SIM_UNREACHABLE_IDS merken und in der Vorschau nur als
+    # „übersprungen" ausweisen, statt die Simulation zu blockieren.
+    local sim_tid
+    SIM_UNREACHABLE_IDS="|"
+    BORG_SIM_LOADED_ID=""
+    for sim_tid in "${TARGETS[@]}"; do
+        target_enabled "$sim_tid" || continue
+        load_target_context "$sim_tid" || continue
+        case "$(target_type "$sim_tid")" in
+            remote)
+                ensure_remote_ready >/dev/null 2>&1 || SIM_UNREACHABLE_IDS="${SIM_UNREACHABLE_IDS}${sim_tid}|"
+                ;;
+            borg)
+                { borg_ensure_binary && borg_run info >/dev/null 2>&1; } \
+                    || SIM_UNREACHABLE_IDS="${SIM_UNREACHABLE_IDS}${sim_tid}|"
+                ;;
+        esac
+    done
+
     echo
 
     echo "Datasets und geplante Aktionen:"
@@ -4407,6 +4428,113 @@ simulate_retention() {
     done
 }
 
+# Zählt, wie viele verwaltete Quell-Snapshots NACH dem gemeinsamen Snapshot kommen
+# (= würden inkrementell übertragen). Liest "ds@name"-Zeilen (nach creation
+# sortiert) von stdin; $1 = gemeinsamer Snapshotname.
+sim_count_after_common() {
+    local common="$1" line name seen=0 n=0
+    while read -r line; do
+        [ -n "$line" ] || continue
+        name="${line#*@}"
+        [ "$seen" -eq 1 ] && n=$((n+1))
+        [ "$name" = "$common" ] && seen=1
+    done
+    printf '%s' "$n"
+}
+
+# Kompakte Dry-Run-Zeilen für ein lokales Ziel (Kontext geladen). Replikations-
+# Aktion + Anzahl zusätzlicher Ziel-Snapshots, die der Zielabgleich entfernen
+# würde – ohne Snapshot-Namen (übersichtlich).
+sim_target_local() {
+    local ds="$1" target latest common extra=0 snap name repl
+    target=$(local_target_dataset "$ds")
+    latest=$(latest_backup_snapshot_name "$ds")
+    if [ -z "$latest" ]; then
+        repl="kein Quell-Snapshot"
+    elif [ -n "$(local_receive_resume_token "$target")" ]; then
+        repl="Resume offen (wird fortgesetzt)"
+    elif ! zfs list "$target" >/dev/null 2>&1; then
+        repl="Full-Aufbau (Ziel fehlt)"
+    elif zfs list -t snapshot "${target}@${latest}" >/dev/null 2>&1; then
+        repl="aktuell"
+    else
+        common=$(latest_common_snapshot_name "$ds" "$target")
+        if [ -z "$common" ]; then
+            repl="Full-Aufbau (kein gemeinsamer Snapshot)"
+        else
+            repl="inkrementell: $(list_backup_snapshots "$ds" | sim_count_after_common "$common") Snapshot(s)"
+        fi
+    fi
+    if zfs list "$target" >/dev/null 2>&1; then
+        while read -r snap; do
+            [ -n "$snap" ] || continue
+            name="${snap#*@}"
+            source_snapshot_name_exists "$ds" "$name" || extra=$((extra+1))
+        done < <(list_backup_snapshots "$target")
+    fi
+    printf '  Replikation:  %s\n' "$repl"
+    printf '  Zielabgleich: %s zusätzliche(r) Ziel-Snapshot(s) würden entfernt\n' "$extra"
+}
+
+# Kompakte Dry-Run-Zeilen für ein Remote-Ziel (Kontext geladen, Host bereit).
+sim_target_remote() {
+    local ds="$1" target latest common extra=0 snap name repl
+    target=$(remote_target_dataset "$ds")
+    latest=$(latest_backup_snapshot_name "$ds")
+    if [ -z "$latest" ]; then
+        repl="kein Quell-Snapshot"
+    elif [ -n "$(remote_receive_resume_token "$target")" ]; then
+        repl="Resume offen (wird fortgesetzt)"
+    elif ! remote_zfs_list "$target" >/dev/null 2>&1; then
+        repl="Full-Aufbau (Ziel fehlt)"
+    elif remote_snapshot_exists "${target}@${latest}"; then
+        repl="aktuell"
+    else
+        common=$(latest_common_remote_snapshot_name "$ds" "$target")
+        if [ -z "$common" ]; then
+            repl="Full-Aufbau (kein gemeinsamer Snapshot)"
+        else
+            repl="inkrementell: $(list_backup_snapshots "$ds" | sim_count_after_common "$common") Snapshot(s)"
+        fi
+    fi
+    while read -r snap; do
+        [ -n "$snap" ] || continue
+        name="${snap#*@}"
+        source_snapshot_name_exists "$ds" "$name" || extra=$((extra+1))
+    done < <(remote_list_backup_snapshots "$target")
+    printf '  Replikation:  %s\n' "$repl"
+    printf '  Zielabgleich: %s zusätzliche(r) Remote-Snapshot(s) würden entfernt\n' "$extra"
+}
+
+# Kompakte Dry-Run-Zeilen für ein Borg-Ziel (Kontext geladen, Repo erreichbar).
+# Archivliste je Ziel einmal cachen (BORG_SIM_LOADED_ID), nicht je Dataset neu.
+sim_target_borg() {
+    local ds="$1" prefix archive name snap create=0 extra=0 present="|"
+    if [ "${BORG_SIM_LOADED_ID:-}" != "$CURRENT_TARGET_ID" ]; then
+        borg_load_existing_archives
+        BORG_SIM_LOADED_ID="$CURRENT_TARGET_ID"
+    fi
+    prefix=$(borg_dataset_prefix "$ds")
+    while read -r snap; do
+        name="${snap#*@}"
+        [ -n "$name" ] || continue
+        present="${present}${name}|"
+        borg_archive_exists "$(borg_archive_name "$ds" "$name")" || create=$((create+1))
+    done < <(list_backup_snapshots "$ds")
+    while IFS= read -r archive; do
+        [ -n "$archive" ] || continue
+        case "$archive" in "${prefix}"*) ;; *) continue ;; esac
+        name="${archive#"${prefix}"}"
+        case "$present" in *"|${name}|"*) ;; *) extra=$((extra+1)) ;; esac
+    done < <(printf '%s\n' "$BORG_EXISTING_ARCHIVES" | tr '|' '\n')
+    if [ "$create" -gt 0 ]; then
+        printf '  Replikation:  %s Archiv(e) würden erstellt\n' "$create"
+    else
+        printf '  Replikation:  aktuell\n'
+    fi
+    printf '  Zielabgleich: %s Archiv(e) würden entfernt\n' "$extra"
+}
+
 simulate_dataset() {
     local ds="$1"
     local DATE=$(date +%Y-%m-%d)
@@ -4485,20 +4613,22 @@ simulate_dataset() {
         echo "  deaktiviert"
     fi
 
+    local type
     for target_id in "${TARGETS[@]}"; do
         target_enabled "$target_id" || continue
         load_target_context "$target_id" || continue
-        case "$(target_type "$target_id")" in
-            local)
-                echo "Zielabgleich $(target_label "$target_id"):"
-                echo "  Ziel wird auf den verwalteten Snapshot-Bestand der Quelle gespiegelt."
-                echo "  Zusätzliche verwaltete Ziel-Snapshots würden entfernt."
-                ;;
-            remote)
-                echo "Zielabgleich $(target_label "$target_id"):"
-                echo "  Remote-Ziel wird auf den verwalteten Snapshot-Bestand der Quelle gespiegelt."
-                echo "  Zusätzliche verwaltete Remote-Snapshots würden entfernt, wenn der Host erreichbar ist."
-                ;;
+        type=$(target_type "$target_id")
+        echo "Zielabgleich $(target_label "$target_id") [${type}]:"
+        # Vorab in simulate() als nicht erreichbar markiert? Dann nur Hinweis.
+        case "$SIM_UNREACHABLE_IDS" in
+            *"|${target_id}|"*)
+                echo "  Ziel nicht erreichbar – übersprungen"
+                continue ;;
+        esac
+        case "$type" in
+            local)  sim_target_local  "$ds" ;;
+            remote) sim_target_remote "$ds" ;;
+            borg)   sim_target_borg   "$ds" ;;
         esac
     done
 }
@@ -4535,16 +4665,13 @@ simulate_orphan_datasets() {
         case "$type" in local|remote) ;; *) continue ;; esac
         load_target_context "$target_id" || continue
 
-        if [ "$type" = "remote" ]; then
-            # Wie im Lauf bereitmachen (ggf. Wake-on-LAN). ensure_remote_ready
-            # meldet den Fortschritt selbst.
-            if ! ensure_remote_ready >/dev/null 2>&1; then
-                printf "  %s: Remote nicht erreichbar – Verwaisten-Prüfung übersprungen\n" "$(target_label "$target_id")"
-                continue
-            fi
-        else
-            zfs list "$LOCAL_BACKUP_POOL" >/dev/null 2>&1 || continue
-        fi
+        # Erreichbarkeit wurde in simulate() vorab ermittelt (Remote geweckt).
+        case "$SIM_UNREACHABLE_IDS" in
+            *"|${target_id}|"*)
+                printf "  %s: Ziel nicht erreichbar – Verwaisten-Prüfung übersprungen\n" "$(target_label "$target_id")"
+                continue ;;
+        esac
+        [ "$type" = "local" ] && { zfs list "$LOCAL_BACKUP_POOL" >/dev/null 2>&1 || continue; }
 
         while read -r target; do
             [ -n "$target" ] || continue

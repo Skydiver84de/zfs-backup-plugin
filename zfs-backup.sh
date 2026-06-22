@@ -6886,6 +6886,41 @@ borg_providers_json() {
 JSON
 }
 
+# CLI: Archive eines/aller borg-Ziele anzeigen (--borg-archives [<ziel-id>]).
+# Reicht `borg list` durch (Archivname + Datum), je Ziel ein Abschnitt. Ersetzt die
+# manuelle BORG_*-Env-Hantiererei. Rückgabe 0/1.
+cli_borg_archives() {
+    local only_target="${1:-}"
+    local target_id found=0
+
+    for target_id in "${TARGETS[@]}"; do
+        [ "$(target_type "$target_id")" = "borg" ] || continue
+        [ -n "$only_target" ] && [ "$target_id" != "$only_target" ] && continue
+        found=1
+        load_target_context "$target_id" || continue
+        printf '== %s (%s) ==\n' "$(target_label "$target_id")" "$BORG_REPO"
+        if ! borg_ensure_binary; then
+            echo "  Borg-Binary nicht verfügbar."
+            echo
+            continue
+        fi
+        if ! borg_run list 2> >(log_stderr "borg list"); then
+            echo "  (Repo nicht erreichbar – Passphrase/Netz/Repo prüfen)"
+        fi
+        echo
+    done
+
+    if [ "$found" -eq 0 ]; then
+        if [ -n "$only_target" ]; then
+            echo "Kein borg-Ziel mit ID $only_target." >&2
+        else
+            echo "Keine borg-Ziele konfiguriert." >&2
+        fi
+        return 1
+    fi
+    return 0
+}
+
 ########################################
 # Verify
 ########################################
@@ -7490,6 +7525,10 @@ Verwendung:
       Erreichbarkeit eines Ziels prüfen (lokal: zfs list; remote: ggf. wecken
       und remote zfs list; borg: Binary, Cache-Verzeichnis und `borg info`).
 
+  zfs-backup.sh --borg-archives [<ziel-id>]
+      Archive der borg-Ziele anzeigen (borg list). Ohne ID alle borg-Ziele,
+      sonst nur das angegebene. Ersetzt die manuelle BORG_*-Env-Eingabe.
+
   zfs-backup.sh --reorder-targets <id,id,...>
       Backup-Reihenfolge der Ziele neu festlegen. Erwartet ALLE vorhandenen
       Ziel-IDs genau einmal in der gewünschten Reihenfolge (erstes Ziel zuerst).
@@ -7846,6 +7885,13 @@ handle_cli() {
                 exit 1
             fi
             target_test "${CLI_ARGS[1]}"
+            exit $?
+            ;;
+
+        --borg-archives)
+
+            # Archive eines/aller borg-Ziele anzeigen (optional auf eine ID beschränkt).
+            cli_borg_archives "${CLI_ARGS[1]:-}"
             exit $?
             ;;
 
@@ -8719,7 +8765,7 @@ esac
 # wird blockiert, bis die Config geprüft wurde.
 if [ "$CONFIG_UPDATED" -eq 1 ]; then
     case "$1" in
-        --help|--version|--status|--gui-init|--check-stale|--capacity|--datasets|--snapshots|--targets|--dataset-snapshots|--snapshot-tree|--snapshot-ls|--snapshot-cat|--snapshot-restore|--log-tail|--log-follow|--progress-follow|--config-check|--config-schema|--borg-providers|--get-config|--set-config|--add-target|--delete-target|--edit-target|--test-target|--reorder-targets|--move-target|--reset-statistics|--reset-run-status|--delete-logs|--thin-history|--delete-managed-snapshots|--cleanup-orphans)
+        --help|--version|--status|--gui-init|--check-stale|--capacity|--datasets|--snapshots|--targets|--dataset-snapshots|--snapshot-tree|--snapshot-ls|--snapshot-cat|--snapshot-restore|--log-tail|--log-follow|--progress-follow|--config-check|--config-schema|--borg-providers|--borg-archives|--get-config|--set-config|--add-target|--delete-target|--edit-target|--test-target|--reorder-targets|--move-target|--reset-statistics|--reset-run-status|--delete-logs|--thin-history|--delete-managed-snapshots|--cleanup-orphans)
             ;;
         *)
             echo

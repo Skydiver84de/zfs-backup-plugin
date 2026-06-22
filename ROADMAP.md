@@ -12,13 +12,25 @@ des Datasets. Passphrase liegt als Config-Feld (conf bleibt 600). Ein gemeinsame
 Repo hält mehrere Datasets namespaced (Wiederverwendung des bestehenden Repos).
 
 **Noch offen:**
-* **Binary-Bereitstellung:** borg-Standalone-Binary ins `.txz` bündeln, die
-  `.plg` legt sie bei jedem Array-Start nach `<RUNTIME_DIR>/borg/` (siehe unten).
-  Ohne Binary meldet `--test-target`/`--config-check` „nicht gefunden".
+* **Anbieter-Vorlagen (Provider-Presets):** Beim Anlegen eines borg-Ziels eine
+  Vorlage je Anbieter anbieten, beginnend mit **Hetzner Storage Box** – weil
+  Repo-URL-Muster, Port, Key-Upload und Caveats anbieter­spezifisch sind. Eine
+  Vorlage bringt mit: Repo-URL-Muster/Port, Default-`SSH_OPTIONS`, die
+  Setup-Schritte (Key-Upload via Hetzners `install-ssh-key`, Host-Key, `borg init`)
+  als anzeigbare Anleitung und Hinweise (z. B. „SSH support" an der Box aktivieren).
+  Weitere: rsync.net, BorgBase, generischer SSH-Host. GUI-Auswahl füllt die Felder
+  vor und zeigt die Anleitung; CLI-Variante denkbar (`--add-target … --provider
+  hetzner` bzw. ein Befehl, der die Schritte druckt).
 * **GUI (PHP):** Zieltyp `borg` in der Ziele-Seite (Anlegen/Bearbeiten,
-  Passphrase-Feld), Repo-Status; Snapshots-/Kapazitäts-Ansicht optional.
+  Passphrase-Feld), Provider-Auswahl (s. o.), Repo-Status; Snapshots-/Kapazitäts-
+  Ansicht optional.
 * **Verify/Restore** für borg-Archive (`borg extract`/`borg mount`).
 * **Docs/CHANGELOG** beim Release.
+
+Die **Binary-Bereitstellung** ist erledigt: `plugin/borg-setup.sh` lädt eine
+gepinnte, SHA256-verifizierte Standalone-Binary nach `<RUNTIME_DIR>/borg/`
+(Pool → persistent), ausgelöst von `install.sh` beim Array-Start (sofern ein
+borg-Ziel konfiguriert ist) bzw. bedarfsweise vom Skript.
 
 ### Ursprüngliche Planung (Referenz)
 

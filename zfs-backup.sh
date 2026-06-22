@@ -4694,15 +4694,32 @@ sim_orphan_section() {
 simulate_orphan_datasets() {
     local target_id
     local type
+    local sds line sc sn_total=0 ds_n=0
+    local -a sitems=()
     SIM_ORPHAN_FOUND=0
     SIM_ORPHAN_TRUNCATED=0
 
     echo
     echo "Außer Betrieb / verwaist (würde gemeldet, NICHT gelöscht):"
 
-    # Quelle: aus dem Umfang gefallene Datasets mit verbliebenen Snapshots.
-    sim_orphan_section "Quelle" "Quell-Dataset(s) außer Betrieb (Restsnapshots bleiben)" \
-        < <(list_source_orphan_datasets)
+    # Quelle: bei außer Betrieb genommenen Datasets bleibt das Dataset (Live-Daten),
+    # betroffen sind nur seine verbliebenen verwalteten Snapshots -> diese zählen.
+    while read -r sds; do
+        [ -n "$sds" ] || continue
+        sc=0
+        while read -r line; do [ -n "$line" ] && sc=$((sc+1)); done < <(list_backup_snapshots "$sds")
+        sn_total=$((sn_total+sc)); ds_n=$((ds_n+1))
+        sitems+=("$sds (${sc} Snapshot(s))")
+    done < <(list_source_orphan_datasets)
+    if [ "$ds_n" -gt 0 ]; then
+        SIM_ORPHAN_FOUND=1
+        printf "  Quelle: %s verwaiste Snapshot(s) in %s außer Betrieb genommenen Dataset(s)\n" "$sn_total" "$ds_n"
+        if [ "$ds_n" -le 8 ]; then
+            for line in "${sitems[@]}"; do printf "      %s\n" "$line"; done
+        else
+            SIM_ORPHAN_TRUNCATED=1
+        fi
+    fi
 
     # Ziele (lokal + remote; borg hat keine Ziel-Datasets).
     for target_id in "${TARGETS[@]}"; do

@@ -1,6 +1,26 @@
 # Roadmap
 
-## Geplant: Zieltyp `borg` (entferntes Borg-Repository als Offsite-Ziel)
+## In Arbeit: Zieltyp `borg` (entferntes Borg-Repository als Offsite-Ziel)
+
+**Stand:** Engine + CLI + Config sind in `zfs-backup.sh` implementiert (Zieltyp
+`borg`: `--add-target <label> borg <repo-url>`, `--edit-target … REPO/PASSPHRASE/
+SSH_OPTIONS/COMPACT_EVERY`, `--test-target`). Replikation (`borg create` je
+verwaltetem Snapshot aus `<mountpoint>/.zfs/snapshot/<snap>`), Zielabgleich
+(löscht nur Archive im eigenen Namespace `<dataset>__<snap>`, nie fremde),
+`borg compact` alle `COMPACT_EVERY` Läufe, Fehler blockiert das Quell-Pruning
+des Datasets. Passphrase liegt als Config-Feld (conf bleibt 600). Ein gemeinsames
+Repo hält mehrere Datasets namespaced (Wiederverwendung des bestehenden Repos).
+
+**Noch offen:**
+* **Binary-Bereitstellung:** borg-Standalone-Binary ins `.txz` bündeln, die
+  `.plg` legt sie bei jedem Array-Start nach `<RUNTIME_DIR>/borg/` (siehe unten).
+  Ohne Binary meldet `--test-target`/`--config-check` „nicht gefunden".
+* **GUI (PHP):** Zieltyp `borg` in der Ziele-Seite (Anlegen/Bearbeiten,
+  Passphrase-Feld), Repo-Status; Snapshots-/Kapazitäts-Ansicht optional.
+* **Verify/Restore** für borg-Archive (`borg extract`/`borg mount`).
+* **Docs/CHANGELOG** beim Release.
+
+### Ursprüngliche Planung (Referenz)
 
 Ein zusätzlicher, **optionaler** Zieltyp neben den bestehenden ZFS-Zielen
 (lokal/remote). Deckt die Lücke ab, die unsere `zfs send/recv`-Replikation nicht

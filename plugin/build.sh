@@ -93,6 +93,7 @@ sed -i 's/^SCRIPT_VERSION=.*/SCRIPT_VERSION="'"$VERSION"'"/' "$DEST/zfs-backup.s
 install -m 0755 "$SELF_DIR/install.sh"    "$DEST/install.sh"
 install -m 0755 "$SELF_DIR/uninstall.sh"  "$DEST/uninstall.sh"
 install -m 0755 "$SELF_DIR/schedule.sh"   "$DEST/schedule.sh"
+install -m 0755 "$SELF_DIR/borg-setup.sh" "$DEST/borg-setup.sh"
 install -m 0644 "$SELF_DIR/zfs-backup.completion" "$DEST/zfs-backup.completion"
 install -m 0644 "$SELF_DIR/zfs-backup.svg"        "$DEST/zfs-backup.svg"
 install -m 0644 "$SELF_DIR/zfs-backup.png"        "$DEST/zfs-backup.png"

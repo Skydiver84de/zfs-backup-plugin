@@ -60,6 +60,23 @@ if [ "$SRC" != "$PLUGIN_DIR/zfs-backup.sh" ]; then
 fi
 chmod +x "$PLUGIN_DIR/zfs-backup.sh"
 
+# 5b. Borg-Binary bereitstellen – aber NUR, wenn ein borg-Ziel konfiguriert ist
+#     (sonst lädt niemand ~30 MB ohne Grund). Idempotent: borg-setup.sh prüft die
+#     Checksumme und lädt nur bei fehlender/abweichender Datei. Liegt auf dem Pool
+#     (RUNTIME_DIR) -> persistent, also real nur einmal pro Pool. Schlägt der
+#     Bezug fehl (kein Netz beim Boot), bricht das Setup NICHT ab; borg-Ziele
+#     melden dann „Binary nicht gefunden", alles andere läuft normal weiter.
+CONF="$DATA_DIR/zfs-backup.conf"
+BORG_SETUP=""
+for cand in "$SELF_DIR/borg-setup.sh" "$PLUGIN_DIR/borg-setup.sh"; do
+    [ -f "$cand" ] && { BORG_SETUP="$cand"; break; }
+done
+if [ -n "$BORG_SETUP" ] && [ -f "$CONF" ] && grep -q 'TYPE="borg"' "$CONF" 2>/dev/null; then
+    echo "Borg-Ziel konfiguriert -> borg-Binary sicherstellen ..."
+    ZFS_BACKUP_RUNTIME_DIR="$RUNTIME_DIR" bash "$BORG_SETUP" "$RUNTIME_DIR" \
+        || echo "WARNUNG: borg-Binary konnte nicht bereitgestellt werden (siehe oben)."
+fi
+
 # 6. Wrapper anlegen: setzt Daten-/Runtime-Pfade und ruft das Skript.
 cat > "$WRAPPER" <<EOF
 #!/bin/bash

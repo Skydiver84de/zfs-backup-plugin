@@ -83,9 +83,11 @@ es werden keine erstellt und vorhandene beim Pruning entfernt (kein separater
 ## Ziele
 
 Replikation läuft über Ziele: anzeigen (`--targets [--json]`), anlegen
-(`--add-target <label> <local|remote> <base-dataset> [ssh-host]`), ändern
+(`--add-target <label> <local|remote|borg> <ziel> [ssh-host]`), ändern
 (`--edit-target`), testen (`--test-target`), löschen (`--delete-target`),
 sortieren (`--reorder-targets <id,id,...>` oder `--move-target <id> <up|down>`).
+Zieltypen: **local** und **remote** (eigenschafts-erhaltende ZFS-Replikation) und
+**borg** (entferntes Borg-Repository als Offsite-Ziel, siehe unten).
 Die **ID** ist numerisch und automatisch (1, 2, … – beim Löschen und Sortieren
 lückenlos neu nummeriert); der frei wählbare Anzeigename ist das **Label**.
 
@@ -129,6 +131,60 @@ erreichbar, weckt das Skript ihn per `etherwake` und wartet auf SSH/ZFS.
 > Reaktivieren kein gemeinsamer Snapshot mehr – der nächste Lauf baut das Ziel
 > dann **komplett neu auf** (volle Übertragung) statt inkrementell aufzuholen.
 > Innerhalb des Fensters fädelt es sich per Incremental Send wieder ein.
+
+### Borg-Ziel (Offsite)
+
+Ein **borg**-Ziel sichert in ein entferntes [Borg](https://www.borgbackup.org/)-
+Repository (rsync.net, BorgBase, Hetzner Storage Box oder ein eigener SSH-Host mit
+`borg`). Es ist eine **Ergänzung** zu den ZFS-Zielen für ein Offsite-Ziel, das
+selbst kein ZFS braucht – nicht ihr Ersatz.
+
+```bash
+./zfs-backup.sh --add-target hetzner borg "ssh://u123@u123.your-storagebox.de:23/./backups/nas1"
+./zfs-backup.sh --edit-target 3 PASSPHRASE "geheime-repo-passphrase"
+./zfs-backup.sh --test-target 3        # prüft Binary, Cache-Verzeichnis und `borg info`
+```
+
+So funktioniert es:
+
+* **Quelle bleibt maßgeblich.** Pro verwaltetem Snapshot ein borg-Archiv, benannt
+  `<dataset>__<snap>` (`/` → `%`). Gelesen wird read-only aus
+  `<mountpoint>/.zfs/snapshot/<snap>` – derselbe Pfad wie Datei-Browser/Restore.
+  Es gibt **kein** `borg prune`; der Zielabgleich löscht nur Archive zu nicht mehr
+  existierenden Snapshots – und ausschließlich im eigenen Namespace. **Bestehende,
+  fremde Archive im selben Repo werden nie angefasst.** Speicher wird alle
+  `COMPACT_EVERY` Läufe per `borg compact` freigegeben (0 = nie).
+* **Bestehendes Repo wiederverwenden.** Mehrere Datasets liegen namespaced im
+  selben Repo. Borg dedupliziert inhaltsbasiert: zeigt das Ziel auf ein Repo, das
+  die großen Dateien schon kennt, ist der Erstlauf ein reiner **Delta-Upload**
+  (einmalige lokale Lese-/Chunk-Runde, aber kaum Netzlast). Voraussetzung: dasselbe
+  Repo, keine abweichenden Chunker-Parameter. Das Repo muss existieren
+  (`borg init` einmalig manuell).
+* **Passphrase** liegt als Ziel-Feld in der Config (`zfs-backup.conf`, Rechte 600)
+  und wird nie in JSON/GUI ausgegeben. Felder: `REPO`, `PASSPHRASE`,
+  `SSH_OPTIONS` (für `BORG_RSH`), `COMPACT_EVERY`.
+* **borg-Binary** liefert das Plugin nicht im Paket mit, sondern bezieht eine
+  gepinnte Standalone-Binary (verifiziert per SHA256) einmalig nach
+  `<RUNTIME_DIR>/borg/` – das liegt auf dem Pool und ist damit persistent (kein
+  Re-Download bei Reboot/Neuinstallation). Ausgelöst beim Array-Start (sofern ein
+  borg-Ziel konfiguriert ist) oder bedarfsweise beim ersten `--test-target`/Lauf.
+  `BORG_BASE_DIR` (Cache/Config/Index) liegt ebenfalls dort.
+* Ein borg-Fehler **blockiert das Quell-Pruning** des betroffenen Datasets – genau
+  wie bei den ZFS-Zielen.
+
+```bash
+TARGET_3_TYPE="borg"
+TARGET_3_LABEL="hetzner"
+TARGET_3_ENABLED="yes"
+TARGET_3_REPO="ssh://u123@u123.your-storagebox.de:23/./backups/nas1"
+TARGET_3_PASSPHRASE="geheime-repo-passphrase"
+TARGET_3_SSH_OPTIONS="-o BatchMode=yes -o ConnectTimeout=10"
+TARGET_3_COMPACT_EVERY=10
+```
+
+> **Stand:** Engine und CLI sind vollständig; die Pflege läuft aktuell über die
+> CLI-Befehle. GUI-Integration und der Verify/Restore-Pfad für borg-Archive sind
+> in Arbeit (siehe ROADMAP).
 
 ### Verwaiste Ziel-Datasets
 

@@ -80,6 +80,11 @@ RUN_RUNTIME_SECONDS=0
 REMOTE_SSH_ARGS=()
 LOCAL_REPLICATION_FAILED_DATASETS="|"
 REMOTE_REPLICATION_FAILED_DATASETS="|"
+BORG_REPLICATION_FAILED_DATASETS="|"
+BORG_REPLICATION_ERRORS=0
+BORG_DELETED_ARCHIVES=0
+BORG_CREATED_ARCHIVES=0
+BORG_EXISTING_ARCHIVES="|"
 CURRENT_TARGET_ID=""
 CURRENT_TARGET_LABEL=""
 VERIFY_WARNINGS=0
@@ -463,6 +468,23 @@ remote_replication_failed_for_dataset() {
     return 1
 }
 
+mark_borg_replication_failed() {
+    local ds="$1"
+
+    case "$BORG_REPLICATION_FAILED_DATASETS" in
+        *"|${ds}|"*) ;;
+        *) BORG_REPLICATION_FAILED_DATASETS="${BORG_REPLICATION_FAILED_DATASETS}${ds}|" ;;
+    esac
+}
+
+borg_replication_failed_for_dataset() {
+    [ "$BORG_REPLICATION_FAILED_DATASETS" = "|*|" ] && return 0
+    case "$BORG_REPLICATION_FAILED_DATASETS" in
+        *"|${1}|"*) return 0 ;;
+    esac
+    return 1
+}
+
 zfs_name_is_safe() {
     local name="$1"
 
@@ -471,6 +493,21 @@ zfs_name_is_safe() {
         *[!A-Za-z0-9_./:@-]*|/*|*@|@*) return 1 ;;
     esac
 
+    return 0
+}
+
+# Borg-Repo-URL absichern: erlaubt sind ssh://-URLs und lokale/SSH-Kurzpfade
+# (user@host:pfad bzw. /pfad). Keine Newlines/Tabs (zeilenbasierte Verarbeitung),
+# keine Shell-Metazeichen, die in unquoteten Kontexten Ärger machen könnten.
+# Aufrufe quoten die URL ohnehin (shell_quote); dies ist die zusätzliche Hürde.
+borg_repo_is_safe() {
+    local repo="$1"
+
+    [ -n "$repo" ] || return 1
+    case "$repo" in
+        *[$'\n\t']*) return 1 ;;
+        *[\;\&\|\<\>\`\$\(\)\'\"\*\?]*) return 1 ;;
+    esac
     return 0
 }
 
@@ -612,6 +649,17 @@ TARGETS=(
 # TARGET_remote_RETRY_ATTEMPTS=3
 # TARGET_remote_RETRY_WAIT_SECONDS=10
 
+# Beispiel für ein Borg-Ziel (entferntes Borg-Repository als Offsite-Ziel):
+# TARGETS=(
+# borg
+# )
+# TARGET_borg_TYPE="borg"
+# TARGET_borg_ENABLED="yes"
+# TARGET_borg_REPO="ssh://user@host:23/./backups/nas1"
+# TARGET_borg_PASSPHRASE="geheime-repo-passphrase"
+# TARGET_borg_SSH_OPTIONS="-o BatchMode=yes -o ConnectTimeout=10"
+# TARGET_borg_COMPACT_EVERY=10
+
 ########################################
 # Logs
 ########################################
@@ -680,7 +728,8 @@ target_id_is_valid() {
 target_field_names() {
     printf '%s\n' TYPE ENABLED LABEL BASE_DATASET \
         HOST SSH_OPTIONS WAKE_ON_LAN WAKE_MAC WAKE_TIMEOUT_SECONDS \
-        WAKE_CHECK_INTERVAL_SECONDS RETRY_ATTEMPTS RETRY_WAIT_SECONDS
+        WAKE_CHECK_INTERVAL_SECONDS RETRY_ATTEMPTS RETRY_WAIT_SECONDS \
+        REPO PASSPHRASE COMPACT_EVERY
 }
 
 # Nächste freie numerische ID (Ziele sind lückenlos 1..N nummeriert -> N+1).
@@ -804,6 +853,12 @@ target_apply_defaults() {
             target_set "$target_id" RETRY_ATTEMPTS "$(target_get "$target_id" RETRY_ATTEMPTS 3)"
             target_set "$target_id" RETRY_WAIT_SECONDS "$(target_get "$target_id" RETRY_WAIT_SECONDS 10)"
             ;;
+        borg)
+            target_set "$target_id" REPO "$(target_get "$target_id" REPO "")"
+            target_set "$target_id" PASSPHRASE "$(target_get "$target_id" PASSPHRASE "")"
+            target_set "$target_id" SSH_OPTIONS "$(target_get "$target_id" SSH_OPTIONS "-o BatchMode=yes -o ConnectTimeout=10")"
+            target_set "$target_id" COMPACT_EVERY "$(target_get "$target_id" COMPACT_EVERY 10)"
+            ;;
     esac
 }
 
@@ -826,6 +881,8 @@ target_apply_all_defaults() {
 # --add-target. Die ID wird automatisch numerisch vergeben (nächste freie);
 # der Nutzer gibt nur das Label (Anzeigename, frei wählbar). Validiert atomar
 # VOR dem Anlegen, ergänzt Typ-Defaults und persistiert. Rückgabe 0/1.
+# Bei borg trägt das dritte Argument die Repo-URL (statt eines Basis-Datasets),
+# das vierte ist ungenutzt. local/remote nutzen es wie bisher als Ziel-Dataset.
 target_create() {
     local label="$1"
     local type="$2"
@@ -837,12 +894,19 @@ target_create() {
         *[$'\n\r']*) console_error "Label darf keine Zeilenumbrüche enthalten"; return 1 ;;
     esac
     case "$type" in
-        local|remote) ;;
-        *) console_error "Ungültiger Typ: $type (erlaubt: local, remote)"; return 1 ;;
+        local|remote|borg) ;;
+        *) console_error "Ungültiger Typ: $type (erlaubt: local, remote, borg)"; return 1 ;;
     esac
-    if [ -z "$base_dataset" ] || ! zfs_name_is_safe "$base_dataset"; then
-        console_error "Ungültiges Basis/Ziel-Dataset: $base_dataset"
-        return 1
+    if [ "$type" = "borg" ]; then
+        if [ -z "$base_dataset" ] || ! borg_repo_is_safe "$base_dataset"; then
+            console_error "Ungültige Borg-Repo-URL: $base_dataset"
+            return 1
+        fi
+    else
+        if [ -z "$base_dataset" ] || ! zfs_name_is_safe "$base_dataset"; then
+            console_error "Ungültiges Basis/Ziel-Dataset: $base_dataset"
+            return 1
+        fi
     fi
     if [ "$type" = "remote" ] && [ -z "$host" ]; then
         console_error "SSH-Host darf bei Remote-Zielen nicht leer sein"
@@ -854,7 +918,11 @@ target_create() {
     target_set "$target_id" TYPE "$type"
     target_set "$target_id" ENABLED yes
     target_set "$target_id" LABEL "${label:-$target_id}"
-    target_set "$target_id" BASE_DATASET "$base_dataset"
+    if [ "$type" = "borg" ]; then
+        target_set "$target_id" REPO "$base_dataset"
+    else
+        target_set "$target_id" BASE_DATASET "$base_dataset"
+    fi
     [ "$type" = "remote" ] && target_set "$target_id" HOST "$host"
 
     target_apply_defaults "$target_id"
@@ -989,7 +1057,7 @@ target_edit_field() {
         return 1
     fi
     case "$field" in
-        LABEL|ENABLED|BASE_DATASET|HOST|SSH_OPTIONS|WAKE_ON_LAN|WAKE_MAC|WAKE_TIMEOUT_SECONDS|WAKE_CHECK_INTERVAL_SECONDS|RETRY_ATTEMPTS|RETRY_WAIT_SECONDS) ;;
+        LABEL|ENABLED|BASE_DATASET|HOST|SSH_OPTIONS|WAKE_ON_LAN|WAKE_MAC|WAKE_TIMEOUT_SECONDS|WAKE_CHECK_INTERVAL_SECONDS|RETRY_ATTEMPTS|RETRY_WAIT_SECONDS|REPO|PASSPHRASE|COMPACT_EVERY) ;;
         *) console_error "Unbekanntes oder nicht editierbares Feld: $field"; return 1 ;;
     esac
     target_edit_value_is_valid "$field" "$value" || return 1
@@ -1028,6 +1096,10 @@ target_test() {
                 return 0
             fi
             console_error "Remote-Ziel nicht erreichbar: ${REMOTE_HOST}:${REMOTE_BASE_DATASET}"
+            return 1
+            ;;
+        borg)
+            borg_target_test && return 0
             return 1
             ;;
     esac
@@ -1088,9 +1160,17 @@ targets_json() {
             printf '"wake_check_interval_seconds":%s,' "$(json_num "$(target_get "$target_id" WAKE_CHECK_INTERVAL_SECONDS 0)")"
             printf '"retry_attempts":%s,' "$(json_num "$(target_get "$target_id" RETRY_ATTEMPTS 0)")"
             printf '"retry_wait_seconds":%s' "$(json_num "$(target_get "$target_id" RETRY_WAIT_SECONDS 0)")"
+            printf '},"borg":null'
+        elif [ "$type" = "borg" ]; then
+            printf '"remote":null,"borg":{'
+            printf '"repo":"%s",' "$(json_escape "$(target_get "$target_id" REPO)")"
+            printf '"ssh_options":"%s",' "$(json_escape "$(target_get "$target_id" SSH_OPTIONS)")"
+            printf '"compact_every":%s,' "$(json_num "$(target_get "$target_id" COMPACT_EVERY 0)")"
+            # Passphrase nie ausgeben – nur, ob sie gesetzt ist.
+            printf '"passphrase_set":%s' "$(json_bool "$([ -n "$(target_get "$target_id" PASSPHRASE)" ] && echo yes || echo no)")"
             printf '}'
         else
-            printf '"remote":null'
+            printf '"remote":null,"borg":null'
         fi
         printf '}'
     done
@@ -1114,6 +1194,7 @@ load_target_context() {
 
     ENABLE_LOCAL_REPLICATION="no"
     ENABLE_REMOTE_REPLICATION="no"
+    ENABLE_BORG_REPLICATION="no"
 
     case "$type" in
         local)
@@ -1132,6 +1213,13 @@ load_target_context() {
             REMOTE_REPLICATION_RETRY_ATTEMPTS="$(target_get "$target_id" RETRY_ATTEMPTS 3)"
             REMOTE_REPLICATION_RETRY_WAIT_SECONDS="$(target_get "$target_id" RETRY_WAIT_SECONDS 10)"
             read -r -a REMOTE_SSH_ARGS <<< "$REMOTE_SSH_OPTIONS"
+            ;;
+        borg)
+            ENABLE_BORG_REPLICATION="$(target_get "$target_id" ENABLED yes)"
+            BORG_REPO="$(target_get "$target_id" REPO "")"
+            BORG_PASSPHRASE_VALUE="$(target_get "$target_id" PASSPHRASE "")"
+            BORG_SSH_OPTIONS="$(target_get "$target_id" SSH_OPTIONS "-o BatchMode=yes -o ConnectTimeout=10")"
+            BORG_COMPACT_EVERY="$(target_get "$target_id" COMPACT_EVERY 10)"
             ;;
         *)
             return 1
@@ -1223,6 +1311,11 @@ write_target_config() {
                     ;;
             esac
         done
+    elif [ "$type" = "borg" ]; then
+        write_config_scalar "$(target_var "$target_id" REPO)" "$(target_get "$target_id" REPO)"
+        write_config_scalar "$(target_var "$target_id" PASSPHRASE)" "$(target_get "$target_id" PASSPHRASE)"
+        write_config_scalar "$(target_var "$target_id" SSH_OPTIONS)" "$(target_get "$target_id" SSH_OPTIONS)"
+        write_config_number "$(target_var "$target_id" COMPACT_EVERY)" "$(target_get "$target_id" COMPACT_EVERY)"
     fi
 }
 
@@ -1960,6 +2053,23 @@ config_check() {
                     ((errors++))
                 fi
                 ;;
+            borg)
+                if [ -z "$BORG_REPO" ] || ! borg_repo_is_safe "$BORG_REPO"; then
+                    console_error "Borg-Repo-URL fehlt oder ist ungültig: ${target_id} -> $BORG_REPO"
+                    ((errors++))
+                fi
+                if ! [ "$BORG_COMPACT_EVERY" -ge 0 ] 2>/dev/null; then
+                    console_error "Borg COMPACT_EVERY muss eine Zahl >= 0 sein: $target_id"
+                    ((errors++))
+                fi
+                if ! borg_bin >/dev/null 2>&1; then
+                    console_warn "Borg-Binary nicht gefunden (weder gebündelt noch im PATH): $target_id"
+                    ((warnings++))
+                elif ! borg_run info >/dev/null 2>&1; then
+                    console_warn "Borg-Repo nicht erreichbar (Passphrase/Netz/Repo prüfen): ${target_id} -> $BORG_REPO"
+                    ((warnings++))
+                fi
+                ;;
             *)
                 console_error "Unbekannter Zieltyp: ${target_id} -> $(target_type "$target_id")"
                 ((errors++))
@@ -2168,11 +2278,15 @@ show_status() {
         else
             target_state="deaktiviert"
         fi
-        printf "  %-12s %-11s | Typ: %s | Ziel: %s" \
-            "$target_id" \
-            "$target_state" \
-            "$target_type" \
-            "$(target_get "$target_id" BASE_DATASET)"
+        if [ "$target_type" = "borg" ]; then
+            printf "  %-12s %-11s | Typ: %s | Repo: %s" \
+                "$target_id" "$target_state" "$target_type" \
+                "$(target_get "$target_id" REPO)"
+        else
+            printf "  %-12s %-11s | Typ: %s | Ziel: %s" \
+                "$target_id" "$target_state" "$target_type" \
+                "$(target_get "$target_id" BASE_DATASET)"
+        fi
         if [ "$target_type" = "remote" ]; then
             printf " | Host: %s" "$(target_get "$target_id" HOST)"
         fi
@@ -2195,7 +2309,7 @@ show_status() {
 status_json() {
 
     local result runtime last_run
-    local local_active remote_active
+    local local_active remote_active borg_active
     local has_run=false
     local running=false
     local running_pid=""
@@ -2217,6 +2331,7 @@ status_json() {
     last_run=$(read_run_stat LAST_RUN "")
     local_active=$(target_enabled_count local)
     remote_active=$(target_enabled_count remote)
+    borg_active=$(target_enabled_count borg)
 
     printf '{'
     printf '"version":"%s",' "$(json_escape "$SCRIPT_VERSION")"
@@ -2257,9 +2372,10 @@ status_json() {
         "$(json_num "$(read_run_stat CREATED_WEEKLY 0)")" \
         "$(json_num "$(read_run_stat CREATED_MONTHLY 0)")" \
         "$(json_num "$(read_run_stat CREATED_YEARLY 0)")"
-    printf '"targets":{"local_active":%s,"remote_active":%s},' \
+    printf '"targets":{"local_active":%s,"remote_active":%s,"borg_active":%s},' \
         "$(json_num "$local_active")" \
-        "$(json_num "$remote_active")"
+        "$(json_num "$remote_active")" \
+        "$(json_num "$borg_active")"
     # Gesicherte Datasets + verwalteter Snapshot-Bestand der Quelle (Stand letzter
     # Lauf, aus den run-stats – kein zfs/kein Wecken). Für die Dashboard-Übersicht.
     printf '"dataset_count":%s,' "$(json_num "$(read_run_stat DATASETS 0)")"
@@ -3005,7 +3121,7 @@ prune_source_snapshots() {
             continue
         fi
 
-        if local_replication_failed_for_dataset "$ds" || remote_replication_failed_for_dataset "$ds"; then
+        if local_replication_failed_for_dataset "$ds" || remote_replication_failed_for_dataset "$ds" || borg_replication_failed_for_dataset "$ds"; then
             log "Quelle-Pruning übersprungen, Replikationsfehler: $ds"
             continue
         fi
@@ -3078,9 +3194,11 @@ run_pruning() {
     local before_source="$DELETED_SNAPSHOTS"
     local before_local="$LOCAL_DELETED_SNAPSHOTS"
     local before_remote="$REMOTE_DELETED_SNAPSHOTS"
+    local before_borg="$BORG_DELETED_ARCHIVES"
     local phase_source
     local phase_local
     local phase_remote
+    local phase_borg
     local summary
 
     if [ "$ENABLE_SOURCE_PRUNING" = "yes" ]; then
@@ -3111,9 +3229,19 @@ run_pruning() {
         fi
     fi
 
+    if [ "$(target_enabled_count borg)" -gt 0 ]; then
+        phase_borg=$((BORG_DELETED_ARCHIVES-before_borg))
+        if [ "$phase_borg" -gt 0 ]; then
+            console_success "Borg-Zielabgleich abgeschlossen: ${phase_borg} Archiv(e) gelöscht"
+        else
+            console_info "Borg-Zielabgleich abgeschlossen: ${phase_borg} Archiv(e) gelöscht"
+        fi
+    fi
+
     summary="Pruning/Zielabgleich abgeschlossen: Quelle $((DELETED_SNAPSHOTS-before_source)) gelöscht"
     [ "$(target_enabled_count local)" -gt 0 ] && summary="${summary}, Lokal $((LOCAL_DELETED_SNAPSHOTS-before_local)) entfernt"
     [ "$(target_enabled_count remote)" -gt 0 ] && summary="${summary}, Remote $((REMOTE_DELETED_SNAPSHOTS-before_remote)) entfernt"
+    [ "$(target_enabled_count borg)" -gt 0 ] && summary="${summary}, Borg $((BORG_DELETED_ARCHIVES-before_borg)) entfernt"
     console_success "$summary"
 }
 
@@ -3246,6 +3374,7 @@ delete_all_managed_snapshots_apply() {
         case "$type" in
             local) maintenance_delete_local_target_snapshots "$target_id" ;;
             remote) maintenance_delete_remote_target_snapshots "$target_id" ;;
+            borg) maintenance_delete_borg_target_archives "$target_id" ;;
         esac
     done
 
@@ -3272,6 +3401,7 @@ thin_snapshot_history_apply() {
     local old_keep_yearly="$KEEP_YEARLY"
     local before_errors
     local before_remote_errors
+    local before_borg_errors
     local before_run_errors
     local before_source="$DELETED_SNAPSHOTS"
     local before_local="$LOCAL_DELETED_SNAPSHOTS"
@@ -3307,11 +3437,12 @@ thin_snapshot_history_apply() {
 
     before_errors="$REPLICATION_ERRORS"
     before_remote_errors="$REMOTE_REPLICATION_ERRORS"
+    before_borg_errors="$BORG_REPLICATION_ERRORS"
 
     log_phase "Ziel-Replikation"
     run_target_replications
 
-    if [ "$REPLICATION_ERRORS" -gt "$before_errors" ] || [ "$REMOTE_REPLICATION_ERRORS" -gt "$before_remote_errors" ]; then
+    if [ "$REPLICATION_ERRORS" -gt "$before_errors" ] || [ "$REMOTE_REPLICATION_ERRORS" -gt "$before_remote_errors" ] || [ "$BORG_REPLICATION_ERRORS" -gt "$before_borg_errors" ]; then
         console_error "Snapshot-Historie nicht ausgedünnt: mindestens ein aktives Ziel konnte nicht synchronisiert werden"
         log "FEHLER: Snapshot-Historie ausdünnen abgebrochen, Ziel-Replikation fehlgeschlagen"
         ((RUN_ERRORS++))
@@ -5106,6 +5237,7 @@ run_target_replication() {
     case "$type" in
         local) run_local_replication ;;
         remote) run_remote_replication ;;
+        borg) run_borg_replication ;;
     esac
 }
 
@@ -6147,11 +6279,373 @@ sync_target_to_source_snapshots() {
     case "$type" in
         local) sync_local_target_to_source_snapshots "$target_id" ;;
         remote) sync_remote_target_to_source_snapshots "$target_id" ;;
+        borg) sync_borg_target_to_source_snapshots "$target_id" ;;
     esac
 }
 
 sync_targets_to_source_snapshots() {
     for_each_enabled_target all sync_target_to_source_snapshots
+}
+
+########################################
+# Borg-Replikation (Offsite-Ziel)
+########################################
+# Optionaler Zieltyp: spiegelt den verwalteten Snapshot-Bestand der Quelle als
+# Borg-Archive in ein entferntes Repository (rsync.net, BorgBase, Hetzner Storage
+# Box oder ein eigener SSH-Host mit borg). Pro verwaltetem Snapshot EIN Archiv,
+# benannt nach Dataset + Snapshot. „Quelle ist maßgeblich" bleibt erhalten: KEIN
+# `borg prune`; der Zielabgleich löscht ausschließlich Archive zu nicht mehr
+# existierenden Snapshots (Pendant zu prune_remote_extra_snapshots).
+#
+# WICHTIG: Borg überträgt über seine EIGENE SSH-Verbindung zum Repo (kein
+# `zfs send | recv`-Pipe). Es gibt hier also keinen Datenstrom, in den fremder
+# stdout-Inhalt geraten könnte – die Stream-Korruptionsgefahr der ZFS-Pfade
+# besteht bei borg nicht. borgs stdout/stderr werden frei geloggt.
+
+# Ablageort für Borg-Binary, Cache, Config und Security-Dir – gebündelt auf dem
+# Pool (RUNTIME_DIR), schont den USB-Stick, übersteht Reboots und beschleunigt
+# über den Chunk-Index die Folgeläufe.
+borg_base_dir() {
+    printf '%s/borg' "$RUNTIME_DIR"
+}
+
+# Pfad zur Borg-Binary. Bevorzugt die ins Plugin gebündelte Standalone-Binary
+# (<RUNTIME_DIR>/borg/borg), sonst ein borg im PATH. Gibt bei Erfolg den Pfad aus
+# und liefert 0; sonst 1 (nichts ausgegeben).
+borg_bin() {
+    local bundled
+    bundled="$(borg_base_dir)/borg"
+    if [ -x "$bundled" ]; then
+        printf '%s' "$bundled"
+        return 0
+    fi
+    if command -v borg >/dev/null 2>&1; then
+        command -v borg
+        return 0
+    fi
+    return 1
+}
+
+# Stellt eine fehlende borg-Binary über das mitgelieferte borg-setup.sh bereit
+# (liegt neben dem Skript im Plugin-Verzeichnis). So genügt nach dem Anlegen
+# eines borg-Ziels ein --test-target/Lauf, ohne auf den nächsten Array-Start zu
+# warten. Liefert 0, wenn danach eine ausführbare Binary vorliegt.
+borg_ensure_binary() {
+    borg_bin >/dev/null 2>&1 && return 0
+    local setup="${SCRIPT_DIR}/borg-setup.sh"
+    if [ -f "$setup" ]; then
+        log "Borg-Binary fehlt – borg-setup.sh wird ausgeführt"
+        ZFS_BACKUP_RUNTIME_DIR="$RUNTIME_DIR" bash "$setup" "$RUNTIME_DIR" \
+            2> >(log_stderr "borg-setup") >/dev/null
+    fi
+    borg_bin >/dev/null 2>&1
+}
+
+# Führt borg im aktuellen Ziel-Kontext aus (BORG_REPO/Passphrase/SSH/Cache aus
+# load_target_context). Nicht-interaktiv: Passphrase kommt aus der Config, borg
+# fragt nie nach. Gibt borgs Exit-Code unverändert durch (0 ok, 1 Warnung,
+# >=2 Fehler).
+borg_run() {
+    local bin base
+    bin="$(borg_bin)" || { log "FEHLER: Borg-Binary nicht gefunden"; return 127; }
+    base="$(borg_base_dir)"
+    mkdir -p "$base" 2>/dev/null
+
+    BORG_REPO="$BORG_REPO" \
+    BORG_PASSPHRASE="$BORG_PASSPHRASE_VALUE" \
+    BORG_BASE_DIR="$base" \
+    BORG_RSH="ssh ${BORG_SSH_OPTIONS}" \
+    "$bin" "$@"
+}
+
+# Archivname je verwaltetem Snapshot: <dataset>__<snap>, wobei „/" im Dataset
+# durch „%" ersetzt wird (in ZFS-Namen nie vorhanden -> umkehrbar, kollisionsfrei).
+# So liegen mehrere Datasets namespaced im selben Repo, ohne fremde Archive (z. B.
+# bestehende Backups des Nutzers) zu berühren.
+borg_dataset_prefix() {
+    local ds="$1"
+    printf '%s__' "${ds//\//%}"
+}
+
+borg_archive_name() {
+    local ds="$1" snap="$2"
+    printf '%s__%s' "${ds//\//%}" "$snap"
+}
+
+# Liest die Archivnamen des Repos einmal pro Lauf in BORG_EXISTING_ARCHIVES
+# (|name|name|-Set), damit die per-Dataset-Replikation nicht je Snapshot ein
+# eigenes `borg list` startet (Onefile-Re-Extraktion + SSH je Aufruf vermeiden).
+borg_load_existing_archives() {
+    local name
+    BORG_EXISTING_ARCHIVES="|"
+    while IFS= read -r name; do
+        [ -n "$name" ] || continue
+        BORG_EXISTING_ARCHIVES="${BORG_EXISTING_ARCHIVES}${name}|"
+    done < <(borg_run list --short 2>/dev/null)
+}
+
+borg_archive_exists() {
+    case "$BORG_EXISTING_ARCHIVES" in
+        *"|${1}|"*) return 0 ;;
+    esac
+    return 1
+}
+
+# Legt für jeden verwalteten Quell-Snapshot ohne Archiv ein borg-Archiv an. Liest
+# read-only aus <mountpoint>/.zfs/snapshot/<snap> – exakt der Pfad, den auch
+# Datei-Browser und Restore nutzen. Ein Fehler markiert das Dataset
+# (mark_borg_replication_failed) und blockiert dadurch sein Quell-Pruning.
+replicate_dataset_borg() {
+    local ds="$1"
+    local snap name archive root rc
+    local did_fail=0
+
+    while IFS= read -r snap; do
+        name="${snap#*@}"
+        [ -n "$name" ] || continue
+        archive="$(borg_archive_name "$ds" "$name")"
+        borg_archive_exists "$archive" && continue
+
+        root="$(local_snapshot_root "$ds" "$name")" || {
+            log "FEHLER: Borg-Quelle nicht browsebar (Mountpoint none/legacy): ${ds}@${name}"
+            write_state last_error "$(date '+%d.%m.%Y %H:%M:%S') Borg-Quelle nicht browsebar: ${ds}@${name}"
+            did_fail=1
+            continue
+        }
+        if [ ! -d "$root" ]; then
+            log "FEHLER: Borg-Snapshot-Pfad fehlt: $root"
+            write_state last_error "$(date '+%d.%m.%Y %H:%M:%S') Borg-Snapshot-Pfad fehlt: $root"
+            did_fail=1
+            continue
+        fi
+
+        log "Borg create: ${ds}@${name} -> ${BORG_REPO}::${archive}"
+        # cd in den Snapshot-Root, „." sichern -> Archiv enthält relative Pfade.
+        ( cd "$root" && borg_run create --one-file-system "::${archive}" . 2> >(log_stderr "Borg create ${archive}") )
+        rc=$?
+        if [ "$rc" -eq 0 ] || [ "$rc" -eq 1 ]; then
+            [ "$rc" -eq 1 ] && log "Borg create Warnung (rc=1, fortgesetzt): ${archive}"
+            BORG_EXISTING_ARCHIVES="${BORG_EXISTING_ARCHIVES}${archive}|"
+            ((BORG_CREATED_ARCHIVES++))
+        else
+            log "FEHLER: Borg create fehlgeschlagen (rc=${rc}): ${archive}"
+            write_state last_error "$(date '+%d.%m.%Y %H:%M:%S') Borg create fehlgeschlagen: ${archive}"
+            did_fail=1
+        fi
+    done < <(list_backup_snapshots "$ds")
+
+    if [ "$did_fail" -eq 1 ]; then
+        ((BORG_REPLICATION_ERRORS++))
+        ((RUN_ERRORS++))
+        mark_borg_replication_failed "$ds"
+    fi
+}
+
+run_borg_replication() {
+    local ds index=0 total
+    local -a datasets
+
+    [ "$ENABLE_BORG_REPLICATION" = "yes" ] || return
+
+    if ! borg_ensure_binary; then
+        log "FEHLER: Borg-Replikation nicht möglich, Binary fehlt"
+        write_state last_error "$(date '+%d.%m.%Y %H:%M:%S') Borg-Binary fehlt"
+        ((BORG_REPLICATION_ERRORS++))
+        ((RUN_ERRORS++))
+        BORG_REPLICATION_FAILED_DATASETS="|*|"
+        return
+    fi
+
+    if ! borg_run info >/dev/null 2>&1; then
+        log "FEHLER: Borg-Repo nicht erreichbar: $BORG_REPO"
+        write_state last_error "$(date '+%d.%m.%Y %H:%M:%S') Borg-Repo nicht erreichbar: $BORG_REPO"
+        ((BORG_REPLICATION_ERRORS++))
+        ((RUN_ERRORS++))
+        BORG_REPLICATION_FAILED_DATASETS="|*|"
+        return
+    fi
+
+    borg_load_existing_archives
+
+    mapfile -t datasets < <(get_datasets)
+    total=${#datasets[@]}
+
+    for ds in "${datasets[@]}"; do
+        [ -n "$ds" ] || continue
+        ((index++))
+        console_status "Borg-Replikation [${index}/${total}]: $ds"
+        replicate_dataset_borg "$ds"
+    done
+
+    if [ "$BORG_REPLICATION_ERRORS" -eq 0 ]; then
+        console_success "Borg-Replikation abgeschlossen"
+    else
+        console_error "Borg-Replikation abgeschlossen"
+    fi
+    console_info "Archive: ${BORG_CREATED_ARCHIVES} neu erstellt"
+}
+
+# Borg-Zielabgleich: löscht je Dataset die Archive im eigenen Namespace
+# (<dataset>__…), deren Quell-Snapshot nicht mehr existiert. Fremde Archive
+# (bestehende Backups des Nutzers ohne unseren Präfix) werden NIE angefasst.
+borg_prune_extra_archives() {
+    local ds="$1"
+    local prefix archive name snap
+
+    prefix="$(borg_dataset_prefix "$ds")"
+
+    # Aktuell verwaltete Quell-Snapshotnamen als Set sammeln.
+    local present="|"
+    while IFS= read -r snap; do
+        name="${snap#*@}"
+        [ -n "$name" ] || continue
+        present="${present}${name}|"
+    done < <(list_backup_snapshots "$ds")
+
+    while IFS= read -r archive; do
+        [ -n "$archive" ] || continue
+        case "$archive" in
+            "${prefix}"*) ;;
+            *) continue ;;
+        esac
+        snap="${archive#"${prefix}"}"
+        case "$present" in
+            *"|${snap}|"*) continue ;;
+        esac
+
+        log "Borg-Zielabgleich zusätzliches Archiv: ${archive}"
+        if borg_run delete "::${archive}" 2> >(log_stderr "Borg delete ${archive}"); then
+            ((BORG_DELETED_ARCHIVES++))
+            log "Borg-Zielabgleich gelöscht: ${archive}"
+        else
+            log "FEHLER: Borg-Archiv konnte nicht gelöscht werden: ${archive}"
+            write_state last_error "$(date '+%d.%m.%Y %H:%M:%S') Borg-Zielabgleich fehlgeschlagen: ${archive}"
+            ((RUN_ERRORS++))
+        fi
+    done < <(printf '%s\n' "${BORG_EXISTING_ARCHIVES}" | tr '|' '\n')
+}
+
+# Gibt Speicher frei (Dedup gibt erst beim Compact frei). Läuft NICHT jeden Lauf,
+# sondern alle COMPACT_EVERY Läufe (Zähler je Ziel im State). 0 = nie.
+borg_compact_if_due() {
+    local key count every
+    every="${BORG_COMPACT_EVERY:-10}"
+    [ "$every" -gt 0 ] 2>/dev/null || return 0
+
+    key="borg_compact_${CURRENT_TARGET_ID}"
+    count="$(state_value "$key" 0)"
+    case "$count" in ''|*[!0-9]*) count=0 ;; esac
+    count=$((count+1))
+
+    if [ "$count" -ge "$every" ]; then
+        console_status "Borg compact $(target_label "$CURRENT_TARGET_ID"): Speicher freigeben"
+        log "Borg compact: ${BORG_REPO}"
+        if borg_run compact 2> >(log_stderr "Borg compact"); then
+            log "Borg compact abgeschlossen"
+        else
+            log "FEHLER: Borg compact fehlgeschlagen: ${BORG_REPO}"
+            write_state last_error "$(date '+%d.%m.%Y %H:%M:%S') Borg compact fehlgeschlagen: ${BORG_REPO}"
+            ((RUN_ERRORS++))
+        fi
+        count=0
+    fi
+    write_state "$key" "$count"
+}
+
+sync_borg_target_to_source_snapshots() {
+    local target_id="$1"
+    local ds index=0 total
+    local before="$BORG_DELETED_ARCHIVES"
+    local deleted
+    local -a datasets
+
+    if ! borg_ensure_binary || ! borg_run info >/dev/null 2>&1; then
+        log "FEHLER: Borg-Zielabgleich nicht möglich, Repo nicht erreichbar: $BORG_REPO"
+        write_state last_error "$(date '+%d.%m.%Y %H:%M:%S') Borg-Zielabgleich nicht möglich: $BORG_REPO"
+        ((BORG_REPLICATION_ERRORS++))
+        ((RUN_ERRORS++))
+        return
+    fi
+
+    borg_load_existing_archives
+
+    mapfile -t datasets < <(get_datasets)
+    total=${#datasets[@]}
+
+    for ds in "${datasets[@]}"; do
+        [ -n "$ds" ] || continue
+        ((index++))
+        console_status "Borg-Zielabgleich $(target_label "$target_id") [${index}/${total}]: $ds"
+        borg_prune_extra_archives "$ds"
+    done
+
+    # Speicher erst nach dem Löschen freigeben (sinnvollster Zeitpunkt).
+    borg_compact_if_due
+
+    deleted=$((BORG_DELETED_ARCHIVES-before))
+    console_info "Borg-Zielabgleich $(target_label "$target_id") abgeschlossen: ${deleted} Archiv(e) entfernt"
+}
+
+# Prüft ein Borg-Ziel (Kern für --test-target): Binary ausführbar,
+# BORG_BASE_DIR beschreibbar, Repo per `borg info` erreichbar. Setzt einen
+# geladenen Ziel-Kontext voraus (load_target_context).
+borg_target_test() {
+    local base
+    if ! borg_ensure_binary; then
+        console_error "Borg-Binary nicht gefunden (weder gebündelt unter $(borg_base_dir) noch im PATH) und konnte nicht bezogen werden"
+        return 1
+    fi
+    base="$(borg_base_dir)"
+    if ! mkdir -p "$base" 2>/dev/null || [ ! -w "$base" ]; then
+        console_error "Borg-Cache-Verzeichnis nicht beschreibbar: $base"
+        return 1
+    fi
+    if [ -z "$BORG_REPO" ]; then
+        console_error "Borg-Repo-URL nicht gesetzt"
+        return 1
+    fi
+    if borg_run info >/dev/null 2>&1; then
+        console_success "Borg-Repo erreichbar: $BORG_REPO"
+        return 0
+    fi
+    console_error "Borg-Repo nicht erreichbar (Passphrase/Netz/Repo prüfen): $BORG_REPO"
+    return 1
+}
+
+# Maintenance „Snapshots löschen": entfernt alle Archive im verwalteten Namespace
+# aller aktiven Datasets aus dem Repo (nie fremde Archive). Setzt geladenen
+# Ziel-Kontext voraus.
+maintenance_delete_borg_target_archives() {
+    local target_id="$1"
+    local ds archive prefix
+    local -a datasets
+
+    if ! borg_bin >/dev/null 2>&1 || ! borg_run info >/dev/null 2>&1; then
+        console_error "Borg-Repo nicht erreichbar: $BORG_REPO"
+        ((MAINTENANCE_SNAPSHOT_ERRORS++))
+        return
+    fi
+
+    borg_load_existing_archives
+    mapfile -t datasets < <(get_datasets)
+
+    for ds in "${datasets[@]}"; do
+        [ -n "$ds" ] || continue
+        prefix="$(borg_dataset_prefix "$ds")"
+        console_status "Archive löschen $(target_label "$target_id"): $ds"
+        while IFS= read -r archive; do
+            [ -n "$archive" ] || continue
+            case "$archive" in "${prefix}"*) ;; *) continue ;; esac
+            log "Maintenance Borg: Archiv wird gelöscht: ${archive}"
+            if borg_run delete "::${archive}" 2> >(log_stderr "Borg delete ${archive}"); then
+                ((MAINTENANCE_SNAPSHOTS_DELETED++))
+                log "Maintenance Borg: Archiv gelöscht: ${archive}"
+            else
+                ((MAINTENANCE_SNAPSHOT_ERRORS++))
+                log "FEHLER: Maintenance Borg: Archiv konnte nicht gelöscht werden: ${archive}"
+            fi
+        done < <(printf '%s\n' "${BORG_EXISTING_ARCHIVES}" | tr '|' '\n')
+    done
 }
 
 ########################################
@@ -6727,10 +7221,12 @@ Verwendung:
   zfs-backup.sh --targets [--json]
       Replikationsziele anzeigen. Mit --json maschinenlesbar für die GUI.
 
-  zfs-backup.sh --add-target <label> <local|remote> <base-dataset> [ssh-host]
+  zfs-backup.sh --add-target <label> <local|remote|borg> <ziel> [ssh-host]
       Neues Replikationsziel anlegen. Die ID wird automatisch numerisch
       vergeben; <label> ist der frei wählbare Anzeigename. Typ-Defaults werden
-      automatisch ergänzt.
+      automatisch ergänzt. <ziel> ist bei local/remote das Basis/Ziel-Dataset,
+      bei borg die Repo-URL (z. B. ssh://user@host:23/./backups/nas1). Die
+      Borg-Passphrase danach per --edit-target <id> PASSPHRASE setzen.
 
   zfs-backup.sh --delete-target <id>
       Replikationsziel entfernen. Die verbleibenden Ziele werden danach
@@ -6740,7 +7236,8 @@ Verwendung:
       Ein Feld eines Ziels ändern (LABEL, ENABLED, BASE_DATASET; remote
       zusätzlich HOST, SSH_OPTIONS, WAKE_ON_LAN, WAKE_MAC,
       WAKE_TIMEOUT_SECONDS, WAKE_CHECK_INTERVAL_SECONDS, RETRY_ATTEMPTS,
-      RETRY_WAIT_SECONDS).
+      RETRY_WAIT_SECONDS; borg zusätzlich REPO, PASSPHRASE, SSH_OPTIONS,
+      COMPACT_EVERY).
 
   zfs-backup.sh --cleanup-orphans [<ziel-id>] [--yes]
       Verwaiste Ziel-Datasets (Quelle gelöscht/inaktiv) aufräumen. Optionale
@@ -6750,7 +7247,7 @@ Verwendung:
 
   zfs-backup.sh --test-target <id>
       Erreichbarkeit eines Ziels prüfen (lokal: zfs list; remote: ggf. wecken
-      und remote zfs list).
+      und remote zfs list; borg: Binary, Cache-Verzeichnis und `borg info`).
 
   zfs-backup.sh --reorder-targets <id,id,...>
       Backup-Reihenfolge der Ziele neu festlegen. Erwartet ALLE vorhandenen
@@ -7057,8 +7554,8 @@ handle_cli() {
         --add-target)
 
             if [ "${#CLI_ARGS[@]}" -lt 4 ]; then
-                echo "Verwendung: zfs-backup.sh --add-target <label> <local|remote> <base-dataset> [ssh-host]" >&2
-                echo "  (Die ID wird automatisch vergeben; <label> ist der Anzeigename.)" >&2
+                echo "Verwendung: zfs-backup.sh --add-target <label> <local|remote|borg> <ziel> [ssh-host]" >&2
+                echo "  (Die ID wird automatisch vergeben; <label> ist der Anzeigename. <ziel> = Dataset bzw. bei borg die Repo-URL.)" >&2
                 exit 1
             fi
             if target_create "${CLI_ARGS[1]}" "${CLI_ARGS[2]}" "${CLI_ARGS[3]}" "${CLI_ARGS[4]:-}"; then
@@ -7448,7 +7945,7 @@ Snapshots / Retention|KEEP_WEEKLY|number|Aufzubewahrende wöchentliche Snapshots
 Snapshots / Retention|KEEP_MONTHLY|number|Aufzubewahrende monatliche Snapshots. 0 deaktiviert den Typ (keine Erstellung, kein Bestand).
 Snapshots / Retention|KEEP_YEARLY|number|Aufzubewahrende jährliche Snapshots. 0 deaktiviert den Typ (keine Erstellung, kein Bestand).
 Pruning / Cleanup|ENABLE_SOURCE_PRUNING|bool|Löscht ältere verwaltete Snapshots auf der Quelle gemäß Retention.
-Ziele|TARGETS|array|Liste der Replikationsziele in Backup-Reihenfolge (erstes Ziel zuerst). Pflege über die Ziel-Befehle (--add-target, --edit-target, --delete-target, --test-target, --reorder-targets, --move-target).
+Ziele|TARGETS|array|Liste der Replikationsziele in Backup-Reihenfolge (erstes Ziel zuerst). Typen: local, remote, borg (entferntes Borg-Repository als Offsite-Ziel). Pflege über die Ziel-Befehle (--add-target, --edit-target, --delete-target, --test-target, --reorder-targets, --move-target).
 Logs / Benachrichtigung|LOG_RETENTION_DAYS|number|Anzahl Tage, die tägliche Logdateien behalten werden.
 Logs / Benachrichtigung|NOTIFY_START|enum:aus,normal,warning,alert|Unraid-Notification beim Start eines Laufs. Stufe wählen oder "aus".
 Logs / Benachrichtigung|NOTIFY_SUCCESS|enum:aus,normal,warning,alert|Unraid-Notification bei erfolgreichem Lauf. Stufe wählen oder "aus".
@@ -7787,11 +8284,22 @@ target_edit_value_is_valid() {
                 return 1
             fi
             ;;
-        WAKE_TIMEOUT_SECONDS|WAKE_CHECK_INTERVAL_SECONDS|RETRY_ATTEMPTS|RETRY_WAIT_SECONDS)
+        WAKE_TIMEOUT_SECONDS|WAKE_CHECK_INTERVAL_SECONDS|RETRY_ATTEMPTS|RETRY_WAIT_SECONDS|COMPACT_EVERY)
             if ! [ "$value" -ge 0 ] 2>/dev/null; then
                 console_error "Bitte eine ganze Zahl >= 0 eingeben."
                 return 1
             fi
+            ;;
+        REPO)
+            if [ -z "$value" ] || ! borg_repo_is_safe "$value"; then
+                console_error "Ungültige Borg-Repo-URL: $value"
+                return 1
+            fi
+            ;;
+        PASSPHRASE)
+            case "$value" in
+                *[$'\n\r']*) console_error "Passphrase darf keine Zeilenumbrüche enthalten."; return 1 ;;
+            esac
             ;;
     esac
 

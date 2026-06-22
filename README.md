@@ -188,8 +188,23 @@ füllt Repo-URL-Muster und SSH-Optionen vor und zeigt die Einrichtungsschritte;
 Repo-URL, Passphrase, SSH-Optionen und das Compact-Intervall lassen sich dort und
 später über „Bearbeiten" pflegen. „Testen" prüft das Repo wie `--test-target`.
 
-> **Stand:** Engine, CLI und GUI (inkl. Anbieter-Vorlagen) sind vollständig. Der
-> Verify/Restore-Pfad für borg-Archive ist noch in Arbeit (siehe ROADMAP).
+**Prüfen & Wiederherstellen:** `zfs-backup --borg-archives` zeigt die Archive,
+`--verify-borg` prüft den Bestand (fehlende/zusätzliche Archive, rein meldend).
+Wiederherstellen per CLI:
+
+```bash
+# ganzes Archiv eines Snapshots in <quell-mountpoint>/_restore/<snapshot>/ holen
+./zfs-backup.sh --snapshot-restore cache/appdata/caddy2 nas1_daily_2026-06-23_00-40 <borg-ziel-id>
+# nur einen Unterpfad
+./zfs-backup.sh --snapshot-restore cache/appdata/caddy2 <snapshot> <borg-ziel-id> config/settings.json
+```
+
+Bei borg ist `<dataset>` das **Quell-Dataset** (nicht ein Ziel-Dataset); intern wird
+aus dem Archiv `<dataset>__<snapshot>` per `borg extract` geholt (nicht destruktiv).
+
+> **Stand:** Engine, CLI, GUI (inkl. Anbieter-Vorlagen), Verify und CLI-Restore sind
+> vollständig. Offen ist nur noch der GUI-Datei-Browser für Einzeldatei-Restore aus
+> borg-Archiven (siehe ROADMAP).
 
 ### Verwaiste / außer Betrieb genommene Datasets
 

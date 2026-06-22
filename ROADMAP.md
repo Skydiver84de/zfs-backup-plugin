@@ -12,12 +12,20 @@ des Datasets. Passphrase liegt als Config-Feld (conf bleibt 600). Ein gemeinsame
 Repo hält mehrere Datasets namespaced (Wiederverwendung des bestehenden Repos).
 
 **Noch offen:**
-* **Verify/Restore** für borg-Archive (`borg extract`/`borg mount`) – inkl.
-  Anzeige der Archive (z. B. `--borg-archives`) und Restore-Pfad in der GUI.
+* **GUI-Datei-Browser + Restore für borg-Archive:** die Snapshots-Seite zeigt
+  bislang nur ZFS-Snapshots (aus dem State). Für Einzeldatei-Restore aus borg über
+  die GUI müsste der Datei-Browser (`--snapshot-ls`) borg-Archive unterstützen
+  (`borg list <archiv> <pfad>`) und die Seite die Archive anzeigen. Der wichtigste
+  Fall (ganzes Archiv zurückholen) geht bereits per CLI.
 * **Snapshots-/Kapazitäts-Ansicht** für borg-Ziele in der GUI (optional).
 * **Docs/CHANGELOG** beim Release.
 
 **Erledigt:**
+* **Verify** für borg-Ziele: `--verify-borg` bzw. in `--verify`/`--verify-target`
+  (rein meldend – fehlende/zusätzliche Archive).
+* **Restore (CLI)** aus borg-Archiven: `--snapshot-restore <quell-dataset>
+  <snapshot> <borg-ziel-id> [<unterpfad>]` via `borg extract` in den
+  `_restore`-Ordner (nicht destruktiv). Archive anzeigen: `--borg-archives`.
 * **Binary-Bereitstellung:** `plugin/borg-setup.sh` lädt eine gepinnte,
   SHA256-verifizierte Standalone-Binary nach `<RUNTIME_DIR>/borg/` (Pool →
   persistent), ausgelöst von `install.sh` beim Array-Start (sofern ein borg-Ziel

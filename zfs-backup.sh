@@ -4428,6 +4428,34 @@ simulate_retention() {
     done
 }
 
+# Set (|name|name|) der verwalteten Quell-Snapshotnamen, die NACH dem (simulierten)
+# Quell-Pruning übrig blieben. Grundlage für den pruning-bewussten Zielabgleich:
+# der echte Lauf prunt erst die Quelle und gleicht DANN die Ziele daran an, also
+# bezieht sich „würde entfernt" auf diesen Stand. Ist das Quell-Pruning aus, bleibt
+# der komplette aktuelle Bestand. Pro Typ die ältesten (count-keep) weglassen
+# (keep=0 => Typ ganz weg), exakt wie prune_source_snapshot_types/simulate_retention.
+sim_source_kept_set() {
+    local ds="$1" spec type keep count remove i name
+    local -a snaps
+    local set="|"
+    for spec in "hourly:${KEEP_HOURLY:-0}" "daily:${KEEP_DAILY:-0}" "weekly:${KEEP_WEEKLY:-0}" "monthly:${KEEP_MONTHLY:-0}" "yearly:${KEEP_YEARLY:-0}"; do
+        type="${spec%%:*}"; keep="${spec##*:}"
+        mapfile -t snaps < <(list_snapshots_by_type "$ds" "$type")
+        count=${#snaps[@]}
+        if [ "$ENABLE_SOURCE_PRUNING" = "yes" ] && [ "$count" -gt "$keep" ]; then
+            remove=$((count-keep))
+        else
+            remove=0
+        fi
+        for ((i=0;i<count;i++)); do
+            [ "$i" -lt "$remove" ] && continue   # die ältesten 'remove' würden geprunt
+            name="${snaps[$i]#*@}"
+            set="${set}${name}|"
+        done
+    done
+    printf '%s' "$set"
+}
+
 # Zählt, wie viele verwaltete Quell-Snapshots NACH dem gemeinsamen Snapshot kommen
 # (= würden inkrementell übertragen). Liest "ds@name"-Zeilen (nach creation
 # sortiert) von stdin; $1 = gemeinsamer Snapshotname.
@@ -4446,7 +4474,7 @@ sim_count_after_common() {
 # Aktion + Anzahl zusätzlicher Ziel-Snapshots, die der Zielabgleich entfernen
 # würde – ohne Snapshot-Namen (übersichtlich).
 sim_target_local() {
-    local ds="$1" target latest common extra=0 snap name repl
+    local ds="$1" kept="$2" target latest common extra=0 snap name repl
     target=$(local_target_dataset "$ds")
     latest=$(latest_backup_snapshot_name "$ds")
     if [ -z "$latest" ]; then
@@ -4469,16 +4497,16 @@ sim_target_local() {
         while read -r snap; do
             [ -n "$snap" ] || continue
             name="${snap#*@}"
-            source_snapshot_name_exists "$ds" "$name" || extra=$((extra+1))
+            case "$kept" in *"|${name}|"*) ;; *) extra=$((extra+1)) ;; esac
         done < <(list_backup_snapshots "$target")
     fi
     printf '  Replikation:  %s\n' "$repl"
-    printf '  Zielabgleich: %s zusätzliche(r) Ziel-Snapshot(s) würden entfernt\n' "$extra"
+    printf '  Zielabgleich: %s Ziel-Snapshot(s) würden entfernt (inkl. Pruning-Folge)\n' "$extra"
 }
 
 # Kompakte Dry-Run-Zeilen für ein Remote-Ziel (Kontext geladen, Host bereit).
 sim_target_remote() {
-    local ds="$1" target latest common extra=0 snap name repl
+    local ds="$1" kept="$2" target latest common extra=0 snap name repl
     target=$(remote_target_dataset "$ds")
     latest=$(latest_backup_snapshot_name "$ds")
     if [ -z "$latest" ]; then
@@ -4500,39 +4528,40 @@ sim_target_remote() {
     while read -r snap; do
         [ -n "$snap" ] || continue
         name="${snap#*@}"
-        source_snapshot_name_exists "$ds" "$name" || extra=$((extra+1))
+        case "$kept" in *"|${name}|"*) ;; *) extra=$((extra+1)) ;; esac
     done < <(remote_list_backup_snapshots "$target")
     printf '  Replikation:  %s\n' "$repl"
-    printf '  Zielabgleich: %s zusätzliche(r) Remote-Snapshot(s) würden entfernt\n' "$extra"
+    printf '  Zielabgleich: %s Remote-Snapshot(s) würden entfernt (inkl. Pruning-Folge)\n' "$extra"
 }
 
 # Kompakte Dry-Run-Zeilen für ein Borg-Ziel (Kontext geladen, Repo erreichbar).
 # Archivliste je Ziel einmal cachen (BORG_SIM_LOADED_ID), nicht je Dataset neu.
 sim_target_borg() {
-    local ds="$1" prefix archive name snap create=0 extra=0 present="|"
+    local ds="$1" kept="$2" prefix archive name snap create=0 extra=0
     if [ "${BORG_SIM_LOADED_ID:-}" != "$CURRENT_TARGET_ID" ]; then
         borg_load_existing_archives
         BORG_SIM_LOADED_ID="$CURRENT_TARGET_ID"
     fi
     prefix=$(borg_dataset_prefix "$ds")
+    # Erstellung: aktuelle verwaltete Quell-Snapshots ohne Archiv (vor Pruning).
     while read -r snap; do
         name="${snap#*@}"
         [ -n "$name" ] || continue
-        present="${present}${name}|"
         borg_archive_exists "$(borg_archive_name "$ds" "$name")" || create=$((create+1))
     done < <(list_backup_snapshots "$ds")
+    # Entfernen: Archive im Namespace, deren Snapshot nach dem Pruning fehlt.
     while IFS= read -r archive; do
         [ -n "$archive" ] || continue
         case "$archive" in "${prefix}"*) ;; *) continue ;; esac
         name="${archive#"${prefix}"}"
-        case "$present" in *"|${name}|"*) ;; *) extra=$((extra+1)) ;; esac
+        case "$kept" in *"|${name}|"*) ;; *) extra=$((extra+1)) ;; esac
     done < <(printf '%s\n' "$BORG_EXISTING_ARCHIVES" | tr '|' '\n')
     if [ "$create" -gt 0 ]; then
         printf '  Replikation:  %s Archiv(e) würden erstellt\n' "$create"
     else
         printf '  Replikation:  aktuell\n'
     fi
-    printf '  Zielabgleich: %s Archiv(e) würden entfernt\n' "$extra"
+    printf '  Zielabgleich: %s Archiv(e) würden entfernt (inkl. Pruning-Folge)\n' "$extra"
 }
 
 simulate_dataset() {
@@ -4613,7 +4642,10 @@ simulate_dataset() {
         echo "  deaktiviert"
     fi
 
-    local type
+    # Quell-Snapshots, die nach dem (simulierten) Pruning übrig blieben – Basis für
+    # den pruning-bewussten Zielabgleich (einmal je Dataset, von allen Zielen genutzt).
+    local type kept
+    kept=$(sim_source_kept_set "$ds")
     for target_id in "${TARGETS[@]}"; do
         target_enabled "$target_id" || continue
         load_target_context "$target_id" || continue
@@ -4626,9 +4658,9 @@ simulate_dataset() {
                 continue ;;
         esac
         case "$type" in
-            local)  sim_target_local  "$ds" ;;
-            remote) sim_target_remote "$ds" ;;
-            borg)   sim_target_borg   "$ds" ;;
+            local)  sim_target_local  "$ds" "$kept" ;;
+            remote) sim_target_remote "$ds" "$kept" ;;
+            borg)   sim_target_borg   "$ds" "$kept" ;;
         esac
     done
 }

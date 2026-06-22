@@ -4504,13 +4504,17 @@ simulate_dataset() {
 }
 
 # Vorschau der außer Betrieb genommenen / verwaisten Datasets, die ein Lauf nur
-# MELDEN (nicht löschen) würde – Quelle und lokale Ziele. Aus dem Backup-Umfang
-# gefallene Datasets werden NICHT mehr automatisch bereinigt; Aufräumen nur über
-# die Wartung. Nur lesend, ohne SSH: Remote-Ziele erst beim tatsächlichen Lauf.
+# MELDEN (nicht löschen) würde – Quelle und ALLE aktiven Ziele. Remote-Ziele
+# werden dafür wie beim echten Lauf bereitgemacht (ggf. per Wake-on-LAN geweckt),
+# damit die Simulation denselben Stand wie --cleanup-orphans zeigt. Ist ein Remote
+# nicht erreichbar, wird er übersprungen (mit Hinweis), statt die Simulation zu
+# blockieren. Aus dem Backup-Umfang gefallene Datasets werden NIE automatisch
+# bereinigt; Aufräumen nur über die Wartung.
 simulate_orphan_datasets() {
     local target_id
     local target
     local source_ds
+    local type
     local found=0
 
     echo
@@ -4523,12 +4527,24 @@ simulate_orphan_datasets() {
         found=1
     done < <(list_source_orphan_datasets)
 
-    # Lokale Ziele: verwaiste Ziel-Datasets (Remote erst beim echten Lauf).
+    # Ziele (lokal + remote). Remote wird wie im Lauf geweckt; nicht erreichbare
+    # Remotes werden mit Hinweis übersprungen.
     for target_id in "${TARGETS[@]}"; do
         target_enabled "$target_id" || continue
-        [ "$(target_type "$target_id")" = "local" ] || continue
+        type=$(target_type "$target_id")
+        case "$type" in local|remote) ;; *) continue ;; esac
         load_target_context "$target_id" || continue
-        zfs list "$LOCAL_BACKUP_POOL" >/dev/null 2>&1 || continue
+
+        if [ "$type" = "remote" ]; then
+            # Wie im Lauf bereitmachen (ggf. Wake-on-LAN). ensure_remote_ready
+            # meldet den Fortschritt selbst.
+            if ! ensure_remote_ready >/dev/null 2>&1; then
+                printf "  %s: Remote nicht erreichbar – Verwaisten-Prüfung übersprungen\n" "$(target_label "$target_id")"
+                continue
+            fi
+        else
+            zfs list "$LOCAL_BACKUP_POOL" >/dev/null 2>&1 || continue
+        fi
 
         while read -r target; do
             [ -n "$target" ] || continue
@@ -4538,10 +4554,6 @@ simulate_orphan_datasets() {
     done
 
     [ "$found" -eq 0 ] && echo "  Keine außer Betrieb genommenen / verwaisten Datasets"
-
-    if [ "$(target_enabled_count remote)" -gt 0 ]; then
-        echo "  Remote-Ziele werden erst beim tatsächlichen Lauf geprüft (keine SSH-Verbindung in der Simulation)."
-    fi
 }
 
 run_snapshot_job() {

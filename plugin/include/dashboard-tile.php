@@ -63,7 +63,7 @@ if (!function_exists('zfs_backup_dashboard_tile')) {
             $lr      = is_array($st['last_run'] ?? null) ? $st['last_run'] : [];
             $result  = $lr['result'] ?? '-';
             $orphans = (int)($st['orphan_datasets'] ?? 0);
-            $srcOrphans = (int)($st['source_orphan_datasets'] ?? 0);
+            $srcOrphans = (int)($st['source_orphan_snapshots'] ?? 0);
             $tg      = is_array($st['targets'] ?? null) ? $st['targets'] : [];
             $dsc     = (int)($st['dataset_count'] ?? 0);
             $inv     = is_array($st['source_inventory'] ?? null) ? $st['source_inventory'] : [];
@@ -93,9 +93,9 @@ if (!function_exists('zfs_backup_dashboard_tile')) {
             $rows .= $row('Aktive Ziele', (int)($tg['local_active'] ?? 0) . ' lokal &middot; ' . (int)($tg['remote_active'] ?? 0) . ' remote');
             if ($orphans > 0 || $srcOrphans > 0) {
                 $ow = [];
-                if ($orphans > 0)    $ow[] = $orphans . ' Ziel';
-                if ($srcOrphans > 0) $ow[] = $srcOrphans . ' Quelle';
-                $rows .= $row('Verwaiste Datasets', '<span class="orange-text" style="font-weight:bold">' . implode(' &middot; ', $ow) . '</span>');
+                if ($orphans > 0)    $ow[] = $orphans . ' Ziel-Dataset(s)';
+                if ($srcOrphans > 0) $ow[] = $srcOrphans . ' Quell-Snapshot(s)';
+                $rows .= $row('Verwaiste Datasets / Snapshots', '<span class="orange-text" style="font-weight:bold">' . implode(' &middot; ', $ow) . '</span>');
             }
         } else {
             $rows .= '<tr><td colspan="2" class="grey-text">zfs-backup nicht erreichbar – Plugin installiert?</td></tr>';

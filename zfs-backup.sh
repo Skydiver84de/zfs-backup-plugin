@@ -4000,12 +4000,17 @@ snapshot_restore() {
     case "$type" in
         local)  base="$LOCAL_BACKUP_POOL" ;;
         remote) base="$REMOTE_BASE_DATASET" ;;
+        borg)   base="" ;;   # borg hat keine Ziel-Datasets: <ds> IST das Quell-Dataset
         *) echo "FEHLER: unbekannter Zieltyp: $scope" >&2; return 1 ;;
     esac
-    case "$ds" in
-        "${base}/"*) src_ds="${ds#"${base}"/}" ;;
-        *) echo "FEHLER: Ziel-Dataset gehört nicht zu diesem Ziel: $ds" >&2; return 1 ;;
-    esac
+    if [ "$type" = "borg" ]; then
+        src_ds="$ds"
+    else
+        case "$ds" in
+            "${base}/"*) src_ds="${ds#"${base}"/}" ;;
+            *) echo "FEHLER: Ziel-Dataset gehört nicht zu diesem Ziel: $ds" >&2; return 1 ;;
+        esac
+    fi
 
     restore_prepare_dest "$src_ds" "$snap" "$rel" || return 1
 
@@ -4046,6 +4051,38 @@ snapshot_restore() {
             fi
             rm -rf "$tmpd" 2>/dev/null
             echo "FEHLER: Remote-Restore fehlgeschlagen (Eintrag nicht übertragen)" >&2
+            return 1
+            ;;
+        borg)
+            if ! borg_ensure_binary || ! borg_run info >/dev/null 2>&1; then
+                echo "FEHLER: Borg-Repo nicht erreichbar: $BORG_REPO" >&2; return 1
+            fi
+            local archive
+            archive=$(borg_archive_name "$src_ds" "$snap")
+            if ! borg_run list --short 2>/dev/null | grep -qxF "$archive"; then
+                echo "FEHLER: Borg-Archiv nicht vorhanden: $archive" >&2; return 1
+            fi
+            tmpd=$(mktemp -d "$(dirname "$RESTORE_DEST")/.zfsrestore.XXXXXX") \
+                || { echo "FEHLER: temporäres Verzeichnis nicht anlegbar" >&2; return 1; }
+            # Archive tragen relative Pfade (cd <root> && borg create … .). rel leer =
+            # ganzes Archiv, sonst nur den Unterpfad. Extraktion ins tmpd (cd).
+            if [ -n "$rel" ]; then
+                ( cd "$tmpd" && borg_run extract "::${archive}" "$rel" 2> >(log_stderr "Borg extract ${archive}") )
+                if [ -e "$tmpd/$rel" ] && mv "$tmpd/$rel" "$RESTORE_DEST"; then
+                    rm -rf "$tmpd" 2>/dev/null
+                    log "Restore (Borg-Ziel ${scope}): ${BORG_REPO}::${archive}/${rel} -> ${RESTORE_DEST}"
+                    restore_emit_done "$RESTORE_DEST"; return 0
+                fi
+            else
+                ( cd "$tmpd" && borg_run extract "::${archive}" 2> >(log_stderr "Borg extract ${archive}") )
+                # tmpd liegt neben RESTORE_DEST -> direkt umbenennen.
+                if mv "$tmpd" "$RESTORE_DEST" 2>/dev/null; then
+                    log "Restore (Borg-Ziel ${scope}): ${BORG_REPO}::${archive} (ganzes Archiv) -> ${RESTORE_DEST}"
+                    restore_emit_done "$RESTORE_DEST"; return 0
+                fi
+            fi
+            rm -rf "$tmpd" 2>/dev/null
+            echo "FEHLER: Borg-Restore fehlgeschlagen (Eintrag nicht extrahiert)" >&2
             return 1
             ;;
     esac
@@ -7596,11 +7633,13 @@ Verwendung:
       Datei/Ordner aus einem Snapshot in den Restore-Ordner des QUELL-Datasets
       (<quell-mountpoint>/_restore/<snapshot>/) zurückholen (nicht destruktiv,
       überschreibt nie). <scope> = source (Quell-Snapshot) ODER eine Ziel-ID
-      (Replikat); bei einem Ziel ist <dataset> das Ziel-Dataset und es wird
-      vorher geprüft, dass das Quell-Dataset existiert. Leerer <unterpfad> =
-      ganzer Snapshot. Remote-Ziele werden dafür ggf. per WOL geweckt. Mit dem
-      optionalen 5. Argument "progress" meldet der Lauf den Fortschritt
-      (FORTSCHRITT <pct> … ZIEL <pfad>) – für die GUI; sonst nur der Zielpfad.
+      (Replikat); bei einem lokalen/Remote-Ziel ist <dataset> das Ziel-Dataset,
+      bei einem borg-Ziel das QUELL-Dataset (borg hat keine Ziel-Datasets; aus dem
+      Archiv <dataset>__<snapshot> wird per `borg extract` geholt). Vorher wird
+      geprüft, dass das Quell-Dataset existiert. Leerer <unterpfad> = ganzer
+      Snapshot. Remote-Ziele werden dafür ggf. per WOL geweckt. Mit dem optionalen
+      5. Argument "progress" meldet der Lauf den Fortschritt (FORTSCHRITT <pct> …
+      ZIEL <pfad>) – für die GUI; sonst nur der Zielpfad.
 
   zfs-backup.sh --targets [--json]
       Replikationsziele anzeigen. Mit --json maschinenlesbar für die GUI.

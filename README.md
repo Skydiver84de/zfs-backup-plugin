@@ -186,16 +186,30 @@ TARGET_3_COMPACT_EVERY=10
 > CLI-Befehle. GUI-Integration und der Verify/Restore-Pfad für borg-Archive sind
 > in Arbeit (siehe ROADMAP).
 
-### Verwaiste Ziel-Datasets
+### Verwaiste / außer Betrieb genommene Datasets
 
-Ein Ziel-Dataset, dessen Quell-Dataset nicht mehr existiert, gilt als „verwaist".
-Ein normaler Lauf **löscht das nie automatisch**, sondern erkennt und loggt es nur
-(und meldet es optional per Notification). So reißt ein versehentlich gelöschtes
-Quell-Dataset nicht seine Backups mit. Aufräumen nur bewusst manuell:
+Ein **normaler Lauf löscht nie automatisch**, wenn ein Dataset aus dem Backup-Umfang
+fällt – er **meldet es nur** (Log, Status, optionale Notification). Das gilt
+einheitlich für Quelle und Ziele und schützt vor stillem Datenverlust. Zwei Fälle:
+
+* **Verwaiste Ziel-Datasets** – das Quell-Dataset wurde gelöscht **oder** aus dem
+  Umfang genommen (siehe unten). Das Ziel-Dataset bleibt unangetastet.
+* **Außer Betrieb genommene Quell-Datasets** – ein Dataset ist nicht mehr aktiv
+  (aus `INCLUDES` entfernt **oder** über `EXCLUDES` ausgeschlossen), trägt aber noch
+  verwaltete Snapshots. Diese bleiben erhalten.
+
+> **Wichtig – ein Dataset aus dem Umfang nehmen löscht nichts.** Verengst du
+> `INCLUDES` oder ergänzt `EXCLUDES`, werden die betroffenen Datasets **weder auf der
+> Quelle noch auf den Zielen automatisch bereinigt** – sie tauchen ab dann als
+> „verwaist / außer Betrieb" in der Meldung auf. Aufräumen passiert ausschließlich
+> bewusst über die Wartung.
+
+Aufräumen nur manuell (Quelle: nur die verwalteten Snapshots; Ziel: das ganze
+Ziel-Dataset):
 
 ```bash
-./zfs-backup.sh --cleanup-orphans [<ziel-id>]          # Dry-Run: zeigt, was gelöscht würde
-./zfs-backup.sh --cleanup-orphans [<ziel-id>] --yes    # löscht (rekursiv, nur unter BASE_DATASET)
+./zfs-backup.sh --cleanup-orphans [<ziel-id>]          # Dry-Run: zeigt, was passieren würde
+./zfs-backup.sh --cleanup-orphans [<ziel-id>] --yes    # führt aus
 ```
 
 In der GUI unter **Wartung** mit getippter Bestätigung; optional je Ziel.

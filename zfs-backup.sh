@@ -1830,7 +1830,7 @@ Snapshots: ${created_total} neu (H $(read_run_stat CREATED_HOURLY 0), D $(read_r
 Bestand Quelle: $(read_run_stat SOURCE_INVENTORY_TOTAL 0) verwaltet (H $(read_run_stat SOURCE_INVENTORY_HOURLY 0), D $(read_run_stat SOURCE_INVENTORY_DAILY 0), W $(read_run_stat SOURCE_INVENTORY_WEEKLY 0), M $(read_run_stat SOURCE_INVENTORY_MONTHLY 0), Y $(read_run_stat SOURCE_INVENTORY_YEARLY 0))
 
 Pruning: Quelle $(read_run_stat DELETED 0), Lokal $(read_run_stat LOCAL_DELETED 0), Remote $(read_run_stat REMOTE_DELETED 0) gelöscht
-Verwaiste Ziel-Datasets: $(read_run_stat ORPHAN_DATASETS 0) (nicht automatisch gelöscht; Aufräumen: --cleanup-orphans)
+Verwaiste Datasets: $(read_run_stat ORPHAN_DATASETS 0) Ziel, $(read_run_stat SOURCE_ORPHAN_DATASETS 0) Quelle außer Betrieb (nicht automatisch gelöscht; Aufräumen: --cleanup-orphans)
 Lokal: $(read_run_stat REPLICATION_FULL 0) Full, $(read_run_stat REPLICATION_INCREMENTAL 0) Incr, $(read_run_stat REPLICATION_RESUMED 0) Resume, $(read_run_stat REPLICATION_SKIPPED 0) aktuell, $(read_run_stat REPLICATION_ERRORS 0) Fehler
 Remote: $(read_run_stat REMOTE_REPLICATION_FULL 0) Full, $(read_run_stat REMOTE_REPLICATION_INCREMENTAL 0) Incr, $(read_run_stat REMOTE_REPLICATION_RESUMED 0) Resume, $(read_run_stat REMOTE_REPLICATION_SKIPPED 0) aktuell, $(read_run_stat REMOTE_REPLICATION_ERRORS 0) Fehler
 
@@ -1879,11 +1879,12 @@ notify_error() {
 
 notify_orphans() {
     [ "$NOTIFY_ORPHANS" = "aus" ] && return 0
-    [ "${ORPHAN_DATASETS_FOUND:-0}" -gt 0 ] || return 0
+    local t="${ORPHAN_DATASETS_FOUND:-0}" s="${SOURCE_ORPHAN_DATASETS_FOUND:-0}"
+    [ "$t" -gt 0 ] || [ "$s" -gt 0 ] || return 0
 
     send_unraid_notify \
-        "ZFS Backup: verwaiste Ziel-Datasets" \
-        "${ORPHAN_DATASETS_FOUND} verwaiste Ziel-Dataset(s) gefunden (Quell-Dataset gelöscht/inaktiv). Werden NICHT automatisch gelöscht – Aufräumen über die Wartung (Verwaiste Datasets)." \
+        "ZFS Backup: verwaiste Datasets" \
+        "${t} verwaiste Ziel-Dataset(s) (Quelle gelöscht/außer Betrieb) und ${s} außer Betrieb genommene(s) Quell-Dataset(s) mit Restsnapshots gefunden. Werden NICHT automatisch gelöscht – Aufräumen über die Wartung (Verwaiste Datasets)." \
         "$NOTIFY_ORPHANS"
 }
 
@@ -2386,8 +2387,11 @@ status_json() {
         "$(json_num "$(read_run_stat SOURCE_INVENTORY_WEEKLY 0)")" \
         "$(json_num "$(read_run_stat SOURCE_INVENTORY_MONTHLY 0)")" \
         "$(json_num "$(read_run_stat SOURCE_INVENTORY_YEARLY 0)")"
-    # Verwaiste Ziel-Datasets (Stand letzter Lauf; werden nie automatisch gelöscht).
+    # Verwaiste Datasets (Stand letzter Lauf; werden nie automatisch gelöscht).
+    # orphan_datasets = Ziel-Datasets; source_orphan_datasets = außer Betrieb
+    # genommene Quell-Datasets mit verbliebenen Snapshots.
     printf '"orphan_datasets":%s,' "$(json_num "$(read_run_stat ORPHAN_DATASETS 0)")"
+    printf '"source_orphan_datasets":%s,' "$(json_num "$(read_run_stat SOURCE_ORPHAN_DATASETS 0)")"
     # Pfade read-only fürs GUI (vom Plugin/Wrapper gesetzt, nicht editierbar).
     printf '"paths":{"data_dir":"%s","runtime_dir":"%s","config_file":"%s","log_dir":"%s","state_dir":"%s","lock_dir":"%s"}' \
         "$(json_escape "$DATA_DIR")" \
@@ -2439,7 +2443,7 @@ simulate() {
         simulate_dataset "$ds"
     done < <(get_datasets)
 
-    simulate_excluded_target_snapshots
+    simulate_orphan_datasets
 
     echo
     console_success "Simulation abgeschlossen: ${count} Dataset(s) geprüft, keine Änderungen ausgeführt"
@@ -3065,40 +3069,6 @@ receive_resume_token_present_on_active_targets() {
     return 1
 }
 
-prune_excluded_source_snapshots() {
-    local pool
-    local ds
-    local snap
-    local seen_pools="|"
-
-    for inc in "${INCLUDES[@]}"; do
-        pool="${inc%%/*}"
-        case "$seen_pools" in
-            *"|${pool}|"*) continue ;;
-        esac
-        seen_pools="${seen_pools}${pool}|"
-
-        while read -r ds; do
-            [ -n "$ds" ] || continue
-            is_active_dataset "$ds" && continue
-            is_pool_root_dataset "$ds" && continue
-
-            while read -r snap; do
-                [ -n "$snap" ] || continue
-                log "Quelle-Pruning ausgeschlossen: ${snap}"
-                if zfs destroy "$snap"; then
-                    ((DELETED_SNAPSHOTS++))
-                    log "Quelle-Pruning ausgeschlossen gelöscht: ${snap}"
-                else
-                    log "FEHLER: Ausgeschlossener Snapshot konnte nicht gelöscht werden: ${snap}"
-                    write_state last_error "$(date '+%d.%m.%Y %H:%M:%S') Pruning ausgeschlossen fehlgeschlagen: ${snap}"
-                    ((RUN_ERRORS++))
-                fi
-            done < <(list_backup_snapshots "$ds")
-        done < <(zfs list -H -o name -r "$pool" 2>/dev/null)
-    done
-}
-
 prune_source_snapshots() {
     local ds
     local index=0
@@ -3109,7 +3079,11 @@ prune_source_snapshots() {
     total=${#datasets[@]}
 
     prune_source_pool_root_snapshots
-    prune_excluded_source_snapshots
+    # Aus dem Backup-Umfang gefallene Datasets (via INCLUDES-Verengung ODER
+    # EXCLUDES) werden hier NICHT mehr automatisch gelöscht. Sie gelten – wie
+    # verwaiste Ziel-Datasets – als „außer Betrieb": ein Lauf meldet sie nur
+    # (report_source_orphan_datasets), gelöscht wird ausschließlich manuell über
+    # die Wartung (maintenance_cleanup_orphans). Schutz vor stillem Datenverlust.
 
     for ds in "${datasets[@]}"; do
         [ -n "$ds" ] || continue
@@ -3150,44 +3124,6 @@ prune_local_extra_snapshots() {
             ((RUN_ERRORS++))
         fi
     done < <(list_backup_snapshots "$target_ds")
-}
-
-# Entfernt verwaltete Snapshots auf Ziel-Datasets, die auf der Quelle zwar
-# existieren, aber ausgeschlossen sind (Pendant zu prune_excluded_source_snapshots).
-# Das Dataset selbst bleibt, weil es ein aktives Child tragen kann; nur die
-# eigenen verwalteten Snapshots werden gelöscht. Echte Orphans (Quell-Dataset
-# existiert nicht mehr) bleiben dem Orphan-Cleanup überlassen.
-prune_excluded_local_target_snapshots() {
-    local target
-    local source_ds
-    local snap
-
-    while read -r target; do
-        [ -n "$target" ] || continue
-        [ "$target" = "$LOCAL_BACKUP_POOL" ] && continue
-        case "$target" in
-            "${LOCAL_BACKUP_POOL}/"*) ;;
-            *) continue ;;
-        esac
-
-        source_ds="${target#${LOCAL_BACKUP_POOL}/}"
-        is_pool_root_dataset "$source_ds" && continue
-        dataset_is_active_by_name "$source_ds" && continue
-        zfs list "$source_ds" >/dev/null 2>&1 || continue
-
-        while read -r snap; do
-            [ -n "$snap" ] || continue
-            log "Lokal-Zielabgleich ausgeschlossen: ${snap}"
-            if zfs destroy "$snap"; then
-                ((LOCAL_DELETED_SNAPSHOTS++))
-                log "Lokal-Zielabgleich ausgeschlossen gelöscht: ${snap}"
-            else
-                log "FEHLER: Ausgeschlossener lokaler Snapshot konnte nicht gelöscht werden: ${snap}"
-                write_state last_error "$(date '+%d.%m.%Y %H:%M:%S') Lokal-Zielabgleich ausgeschlossen fehlgeschlagen: ${snap}"
-                ((RUN_ERRORS++))
-            fi
-        done < <(list_backup_snapshots "$target")
-    done < <(zfs list -H -o name -r "$LOCAL_BACKUP_POOL" 2>/dev/null)
 }
 
 run_pruning() {
@@ -4567,19 +4503,27 @@ simulate_dataset() {
     done
 }
 
-# Vorschau der ausgeschlossenen Ziel-Snapshots, die der Zielabgleich entfernen
-# würde (siehe prune_excluded_local_target_snapshots). Nur lesend, ohne SSH:
-# Remote-Ziele werden erst beim tatsächlichen Lauf geprüft.
-simulate_excluded_target_snapshots() {
+# Vorschau der außer Betrieb genommenen / verwaisten Datasets, die ein Lauf nur
+# MELDEN (nicht löschen) würde – Quelle und lokale Ziele. Aus dem Backup-Umfang
+# gefallene Datasets werden NICHT mehr automatisch bereinigt; Aufräumen nur über
+# die Wartung. Nur lesend, ohne SSH: Remote-Ziele erst beim tatsächlichen Lauf.
+simulate_orphan_datasets() {
     local target_id
     local target
     local source_ds
-    local snap
     local found=0
 
     echo
-    echo "Zielabgleich – ausgeschlossene Datasets:"
+    echo "Außer Betrieb / verwaist (würde gemeldet, NICHT gelöscht):"
 
+    # Quelle: aus dem Umfang gefallene Datasets mit verbliebenen Snapshots.
+    while read -r source_ds; do
+        [ -n "$source_ds" ] || continue
+        printf "  Quelle würde als verwaist gemeldet: %s (Restsnapshots bleiben)\n" "$source_ds"
+        found=1
+    done < <(list_source_orphan_datasets)
+
+    # Lokale Ziele: verwaiste Ziel-Datasets (Remote erst beim echten Lauf).
     for target_id in "${TARGETS[@]}"; do
         target_enabled "$target_id" || continue
         [ "$(target_type "$target_id")" = "local" ] || continue
@@ -4588,26 +4532,12 @@ simulate_excluded_target_snapshots() {
 
         while read -r target; do
             [ -n "$target" ] || continue
-            [ "$target" = "$LOCAL_BACKUP_POOL" ] && continue
-            case "$target" in
-                "${LOCAL_BACKUP_POOL}/"*) ;;
-                *) continue ;;
-            esac
-
-            source_ds="${target#${LOCAL_BACKUP_POOL}/}"
-            is_pool_root_dataset "$source_ds" && continue
-            dataset_is_active_by_name "$source_ds" && continue
-            zfs list "$source_ds" >/dev/null 2>&1 || continue
-
-            while read -r snap; do
-                [ -n "$snap" ] || continue
-                printf "  %s würde gelöscht: %s\n" "$(target_label "$target_id")" "$snap"
-                found=1
-            done < <(list_backup_snapshots "$target")
-        done < <(zfs list -H -o name -r "$LOCAL_BACKUP_POOL" 2>/dev/null)
+            printf "  %s würde als verwaist gemeldet: %s\n" "$(target_label "$target_id")" "$target"
+            found=1
+        done < <(list_target_orphan_datasets "$target_id")
     done
 
-    [ "$found" -eq 0 ] && echo "  Keine ausgeschlossenen lokalen Ziel-Snapshots zu entfernen"
+    [ "$found" -eq 0 ] && echo "  Keine außer Betrieb genommenen / verwaisten Datasets"
 
     if [ "$(target_enabled_count remote)" -gt 0 ]; then
         echo "  Remote-Ziele werden erst beim tatsächlichen Lauf geprüft (keine SSH-Verbindung in der Simulation)."
@@ -5988,17 +5918,99 @@ report_all_target_orphan_datasets() {
     return 0
 }
 
-# Maintenance: verwaiste Ziel-Datasets aufräumen. $1="yes" -> wirklich löschen,
-# sonst Dry-Run (nur anzeigen, was gelöscht würde). $2 = Ziel-ID (leer = alle
-# Ziele). Destruktiv nur mit --yes; jede Löschung über assert_safe_*.
+# Quell-Datasets, die aus dem Backup-Umfang gefallen sind (nicht mehr aktiv – ob
+# durch INCLUDES-Verengung oder EXCLUDES), aber noch verwaltete Snapshots tragen.
+# Quell-Pendant zu list_target_orphan_datasets. Rein lesend; NIE löschen (nur die
+# Wartung räumt auf). Quelle = Live-Daten: hier geht es ausschließlich um die
+# verbliebenen verwalteten Snapshots, niemals um das Dataset selbst.
+list_source_orphan_datasets() {
+    local pool ds inc seen_pools="|" seen_ds="|"
+
+    for inc in "${INCLUDES[@]}"; do
+        pool="${inc%%/*}"
+        case "$seen_pools" in *"|${pool}|"*) continue ;; esac
+        seen_pools="${seen_pools}${pool}|"
+
+        while read -r ds; do
+            [ -n "$ds" ] || continue
+            case "$seen_ds" in *"|${ds}|"*) continue ;; esac
+            is_pool_root_dataset "$ds" && continue
+            is_self_dataset "$ds" && continue
+            is_force_excluded "$ds" && continue
+            dataset_is_active_by_name "$ds" && continue
+            dataset_has_active_descendant "$ds" && continue
+            # Nur melden, wenn überhaupt verwaltete Snapshots übrig sind.
+            [ -n "$(list_backup_snapshots "$ds")" ] || continue
+            seen_ds="${seen_ds}${ds}|"
+            printf '%s\n' "$ds"
+        done < <(zfs list -H -o name -r "$pool" 2>/dev/null)
+    done
+}
+
+# Run-Phase: außer Betrieb genommene Quell-Datasets mit Restsnapshots nur MELDEN,
+# niemals automatisch löschen (analog report_target_orphan_datasets). Setzt
+# SOURCE_ORPHAN_DATASETS_FOUND.
+report_source_orphan_datasets() {
+    local ds n=0
+
+    SOURCE_ORPHAN_DATASETS_FOUND=0
+    while read -r ds; do
+        [ -n "$ds" ] || continue
+        n=$((n+1))
+        log "Quell-Dataset außer Betrieb (nicht mehr im Backup-Umfang; Snapshots bleiben): $ds"
+    done < <(list_source_orphan_datasets)
+
+    if [ "$n" -gt 0 ]; then
+        SOURCE_ORPHAN_DATASETS_FOUND=$n
+        console_warn "${n} Quell-Dataset(s) außer Betrieb mit verbliebenen Snapshots – werden NICHT automatisch gelöscht (Aufräumen über Wartung)."
+        log "Hinweis: ${n} außer Betrieb genommene(s) Quell-Dataset(s). Aufräumen nur manuell: zfs-backup.sh --cleanup-orphans [--yes]."
+    fi
+    return 0
+}
+
+# Maintenance: verwaiste Datasets aufräumen. $1="yes" -> wirklich löschen, sonst
+# Dry-Run (nur anzeigen, was gelöscht würde). $2 = Ziel-ID (leer = alle Ziele +
+# Quelle). Destruktiv nur mit --yes; jede Ziel-Löschung über assert_safe_*. Deckt
+# ab: (a) verwaiste ZIEL-Datasets (Quelle gelöscht/außer Betrieb) -> ganzes
+# Ziel-Dataset löschen; (b) außer Betrieb genommene QUELL-Datasets -> nur deren
+# verbliebene verwaltete Snapshots löschen, NIEMALS das Quell-Dataset.
 maintenance_cleanup_orphans() {
     local do_delete="${1:-no}"
     local only_target="${2:-}"
     local target_id type base target source_ds total=0 deleted=0
+    local source_orphan snap snapn sdeleted
 
     if [ -n "$only_target" ] && ! target_array_contains "$only_target"; then
         echo "FEHLER: Ziel nicht gefunden: $only_target" >&2
         return 1
+    fi
+
+    # (b) Quelle: außer Betrieb genommene Datasets – nur die verbliebenen
+    # verwalteten Snapshots löschen. Nur im Gesamtlauf (kein einzelnes Ziel gewählt).
+    if [ -z "$only_target" ]; then
+        while read -r source_orphan; do
+            [ -n "$source_orphan" ] || continue
+            snapn=0
+            while read -r snap; do [ -n "$snap" ] && snapn=$((snapn+1)); done < <(list_backup_snapshots "$source_orphan")
+            total=$((total+1))
+
+            if [ "$do_delete" != "yes" ]; then
+                printf 'WÜRDE BEREINIGEN  [Quelle] %s (%s Snapshot(s))\n' "$source_orphan" "$snapn"
+                continue
+            fi
+
+            sdeleted=0
+            while read -r snap; do
+                [ -n "$snap" ] || continue
+                if zfs destroy "$snap"; then
+                    sdeleted=$((sdeleted+1)); log "Quell-Orphan-Snapshot gelöscht: $snap"
+                else
+                    echo "FEHLER: konnte nicht löschen: $snap" >&2
+                fi
+            done < <(list_backup_snapshots "$source_orphan")
+            [ "$sdeleted" -gt 0 ] && deleted=$((deleted+1))
+            printf 'BEREINIGT  [Quelle] %s (%s Snapshot(s) gelöscht)\n' "$source_orphan" "$sdeleted"
+        done < <(list_source_orphan_datasets)
     fi
 
     for target_id in "${TARGETS[@]}"; do
@@ -6052,12 +6064,12 @@ maintenance_cleanup_orphans() {
     echo
     if [ "$do_delete" != "yes" ]; then
         if [ "$total" -eq 0 ]; then
-            echo "Keine verwaisten Ziel-Datasets gefunden."
+            echo "Keine verwaisten Datasets gefunden (Quelle und Ziele)."
         else
-            echo "Dry-Run: ${total} Dataset(s) würden gelöscht. Zum Ausführen die Aktion mit Bestätigung erneut starten (--yes)."
+            echo "Dry-Run: ${total} Eintrag/Einträge würden bereinigt (Ziel-Datasets gelöscht, Quell-Snapshots entfernt). Zum Ausführen die Aktion mit Bestätigung erneut starten (--yes)."
         fi
     else
-        echo "Aufräumen abgeschlossen: ${deleted} von ${total} verwaisten Dataset(s) gelöscht."
+        echo "Aufräumen abgeschlossen: ${deleted} von ${total} verwaisten Eintrag/Einträgen bereinigt."
         if [ "$deleted" -gt 0 ]; then
             # GUI-Caches verwerfen (Snapshot-Baum/Listen referenzieren Ziel-Datasets)
             # und den im Status angezeigten Orphan-Zähler nachziehen.
@@ -6072,18 +6084,24 @@ maintenance_cleanup_orphans() {
 # Stand setzen (nach einem Cleanup). Zählt die verbleibenden Orphans über alle
 # aktiven Ziele (kein Wecken nötig: lokal sofort, remote nur wenn erreichbar).
 update_run_stat_orphans() {
-    local file="${STATE_DIR}/last_run_stats" target_id n=0 tmp
+    local file="${STATE_DIR}/last_run_stats" target_id n=0 sn=0 tmp
     [ -f "$file" ] || return 0
     for target_id in "${TARGETS[@]}"; do
         target_enabled "$target_id" || continue
         load_target_context "$target_id" || continue
         while read -r _; do n=$((n+1)); done < <(list_target_orphan_datasets "$target_id")
     done
+    while read -r _; do sn=$((sn+1)); done < <(list_source_orphan_datasets)
     tmp="${file}.tmp.$$"
     if grep -q '^ORPHAN_DATASETS=' "$file"; then
         sed "s/^ORPHAN_DATASETS=.*/ORPHAN_DATASETS=${n}/" "$file" > "$tmp" && mv "$tmp" "$file"
     else
         { cat "$file"; printf 'ORPHAN_DATASETS=%s\n' "$n"; } > "$tmp" && mv "$tmp" "$file"
+    fi
+    if grep -q '^SOURCE_ORPHAN_DATASETS=' "$file"; then
+        sed "s/^SOURCE_ORPHAN_DATASETS=.*/SOURCE_ORPHAN_DATASETS=${sn}/" "$file" > "$tmp" && mv "$tmp" "$file"
+    else
+        { cat "$file"; printf 'SOURCE_ORPHAN_DATASETS=%s\n' "$sn"; } > "$tmp" && mv "$tmp" "$file"
     fi
 }
 
@@ -6107,42 +6125,6 @@ prune_remote_extra_snapshots() {
             ((RUN_ERRORS++))
         fi
     done < <(remote_list_backup_snapshots "$target_ds")
-}
-
-# Remote-Pendant zu prune_excluded_local_target_snapshots: entfernt verwaltete
-# Snapshots auf Remote-Ziel-Datasets, deren Quelle existiert, aber ausgeschlossen
-# ist. Echte Orphans bleiben dem Orphan-Cleanup überlassen.
-prune_excluded_remote_target_snapshots() {
-    local target
-    local source_ds
-    local snap
-
-    while read -r target; do
-        [ -n "$target" ] || continue
-        [ "$target" = "$REMOTE_BASE_DATASET" ] && continue
-        case "$target" in
-            "${REMOTE_BASE_DATASET}/"*) ;;
-            *) continue ;;
-        esac
-
-        source_ds="${target#${REMOTE_BASE_DATASET}/}"
-        is_pool_root_dataset "$source_ds" && continue
-        dataset_is_active_by_name "$source_ds" && continue
-        zfs list "$source_ds" >/dev/null 2>&1 || continue
-
-        while read -r snap; do
-            [ -n "$snap" ] || continue
-            log "Remote-Zielabgleich ausgeschlossen: ${REMOTE_HOST}:${snap}"
-            if remote_destroy_snapshot "$snap"; then
-                ((REMOTE_DELETED_SNAPSHOTS++))
-                log "Remote-Zielabgleich ausgeschlossen gelöscht: ${REMOTE_HOST}:${snap}"
-            else
-                log "FEHLER: Ausgeschlossener Remote-Snapshot konnte nicht gelöscht werden: ${REMOTE_HOST}:${snap}"
-                write_state last_error "$(date '+%d.%m.%Y %H:%M:%S') Remote-Zielabgleich ausgeschlossen fehlgeschlagen: ${snap}"
-                ((RUN_ERRORS++))
-            fi
-        done < <(remote_list_backup_snapshots "$target")
-    done < <(remote_list_datasets_recursive "$REMOTE_BASE_DATASET")
 }
 
 prune_remote_pool_root_snapshots() {
@@ -6210,7 +6192,9 @@ sync_local_target_to_source_snapshots() {
         prune_local_extra_snapshots "$ds" "$target"
     done
 
-    prune_excluded_local_target_snapshots
+    # Aus dem Umfang gefallene Datasets werden NICHT mehr automatisch bereinigt –
+    # sie erscheinen als verwaiste Ziel-Datasets (report_*_orphan_datasets) und
+    # werden nur über die Wartung gelöscht (maintenance_cleanup_orphans).
 
     deleted=$((LOCAL_DELETED_SNAPSHOTS-before))
     console_info "Lokal-Zielabgleich $(target_label "$target_id") abgeschlossen: ${deleted} Snapshot(s) entfernt"
@@ -6264,7 +6248,8 @@ sync_remote_target_to_source_snapshots() {
         prune_remote_extra_snapshots "$ds" "$target"
     done
 
-    prune_excluded_remote_target_snapshots
+    # Siehe sync_local_target_to_source_snapshots: kein Auto-Löschen aus dem Umfang
+    # gefallener Datasets mehr – Meldung als verwaist, Löschen nur über die Wartung.
 
     deleted=$((REMOTE_DELETED_SNAPSHOTS-before))
     console_info "Remote-Zielabgleich $(target_label "$target_id") abgeschlossen: ${deleted} Snapshot(s) entfernt"
@@ -7240,10 +7225,13 @@ Verwendung:
       COMPACT_EVERY).
 
   zfs-backup.sh --cleanup-orphans [<ziel-id>] [--yes]
-      Verwaiste Ziel-Datasets (Quelle gelöscht/inaktiv) aufräumen. Optionale
-      <ziel-id> beschränkt auf ein Ziel (ohne = alle). OHNE --yes nur Dry-Run
-      (zeigt, was gelöscht würde); MIT --yes wird tatsächlich gelöscht
-      (zfs destroy -r). Ein normaler Lauf löscht NIE automatisch.
+      Verwaiste Datasets aufräumen: verwaiste ZIEL-Datasets (Quelle gelöscht oder
+      außer Betrieb) werden ganz gelöscht (zfs destroy -r); außer Betrieb genommene
+      QUELL-Datasets (aus INCLUDES gefallen oder via EXCLUDES) behalten ihr Dataset,
+      nur ihre verbliebenen verwalteten Snapshots werden entfernt. Optionale
+      <ziel-id> beschränkt auf ein Ziel (ohne = alle Ziele + Quelle). OHNE --yes nur
+      Dry-Run (zeigt, was passieren würde); MIT --yes wird ausgeführt. Ein normaler
+      Lauf löscht NIE automatisch – er meldet nur.
 
   zfs-backup.sh --test-target <id>
       Erreichbarkeit eines Ziels prüfen (lokal: zfs list; remote: ggf. wecken
@@ -7950,7 +7938,7 @@ Logs / Benachrichtigung|LOG_RETENTION_DAYS|number|Anzahl Tage, die tägliche Log
 Logs / Benachrichtigung|NOTIFY_START|enum:aus,normal,warning,alert|Unraid-Notification beim Start eines Laufs. Stufe wählen oder "aus".
 Logs / Benachrichtigung|NOTIFY_SUCCESS|enum:aus,normal,warning,alert|Unraid-Notification bei erfolgreichem Lauf. Stufe wählen oder "aus".
 Logs / Benachrichtigung|NOTIFY_ERROR|enum:aus,normal,warning,alert|Unraid-Notification bei Fehlern. Stufe wählen oder "aus".
-Logs / Benachrichtigung|NOTIFY_ORPHANS|enum:aus,normal,warning,alert|Unraid-Notification, wenn ein Lauf verwaiste Ziel-Datasets findet (Quelle gelöscht). Stufe wählen oder "aus".
+Logs / Benachrichtigung|NOTIFY_ORPHANS|enum:aus,normal,warning,alert|Unraid-Notification, wenn ein Lauf verwaiste Datasets findet – verwaiste Ziel-Datasets (Quelle gelöscht/außer Betrieb) oder außer Betrieb genommene Quell-Datasets mit Restsnapshots. Stufe wählen oder "aus".
 Logs / Benachrichtigung|STALE_AFTER_HOURS|number|Warnen, wenn das letzte erfolgreiche Backup älter als N Stunden ist (0 = aus). Wächter läuft nur bei aktivem Zeitplan.
 Zeitplan|SCHEDULE_ENABLED|bool|Geplanten Lauf aktivieren. Nur das Unraid-Plugin wertet dies aus (Cron).
 Zeitplan|SCHEDULE_CRON|string|Cron-Ausdruck (Minute Stunde Tag Monat Wochentag). Vom Zeitplan-Tab gepflegt.
@@ -8410,6 +8398,7 @@ DELETED=${DELETED_SNAPSHOTS}
 LOCAL_DELETED=${LOCAL_DELETED_SNAPSHOTS}
 REMOTE_DELETED=${REMOTE_DELETED_SNAPSHOTS}
 ORPHAN_DATASETS=${ORPHAN_DATASETS_FOUND:-0}
+SOURCE_ORPHAN_DATASETS=${SOURCE_ORPHAN_DATASETS_FOUND:-0}
 SOURCE_SNAPSHOT_COUNT=${source_snapshot_count}
 SOURCE_SNAPSHOT_USED=${source_snapshot_used}
 LOCAL_SNAPSHOT_COUNT=${local_snapshot_count}
@@ -8505,8 +8494,9 @@ log_phase "Snapshots"
 run_snapshot_job
 log_phase "Ziel-Replikation"
 run_target_replications
-log_phase "Verwaiste Ziele"
+log_phase "Verwaiste Datasets"
 report_all_target_orphan_datasets
+report_source_orphan_datasets
 log_phase "Pruning"
 run_pruning
 rotate_logs

@@ -465,6 +465,7 @@ p.muted { color:#999; font-size:12px; }
   $snaps   = $st['snapshots_created'] ?? [];
   $tg      = $st['targets']    ?? [];
   $orphans = (int)($st['orphan_datasets'] ?? 0);
+  $srcOrphans = (int)($st['source_orphan_datasets'] ?? 0);
   $result  = $lr['result']     ?? '-';
   // Lauf-Ergebnis ist "ERFOLG"/"FEHLER" (siehe zfs-backup.sh) – exakt so prüfen,
   // sonst greift weder das grüne/rote Badge noch die Ergebnis-abhängige Anzeige.
@@ -511,9 +512,9 @@ p.muted { color:#999; font-size:12px; }
   </div>
 <?php endif; ?>
 
-<?php if ($orphans > 0): ?>
+<?php if ($orphans > 0 || $srcOrphans > 0): ?>
   <div class="zb-warn">
-    ⚠ <?= $orphans ?> verwaiste Ziel-Dataset(s) (Quell-Dataset gelöscht/inaktiv, Stand letzter Lauf). Werden <strong>nicht</strong> automatisch gelöscht – Aufräumen über <em>Wartung → „Verwaiste Datasets anzeigen/löschen"</em>.
+    ⚠ <?php if ($orphans > 0): ?><?= $orphans ?> verwaiste Ziel-Dataset(s) (Quelle gelöscht/außer Betrieb)<?php endif; ?><?php if ($orphans > 0 && $srcOrphans > 0): ?> und <?php endif; ?><?php if ($srcOrphans > 0): ?><?= $srcOrphans ?> außer Betrieb genommene(s) Quell-Dataset(s) mit Restsnapshots<?php endif; ?> (Stand letzter Lauf). Werden <strong>nicht</strong> automatisch gelöscht – Aufräumen über <em>Wartung → „Verwaiste Datasets anzeigen/löschen"</em>.
   </div>
 <?php endif; ?>
 
@@ -555,7 +556,7 @@ p.muted { color:#999; font-size:12px; }
       <table>
         <tr><td class="k">Lokal</td><td class="v"><?= (int)($tg['local_active'] ?? 0) ?></td></tr>
         <tr><td class="k">Remote</td><td class="v"><?= (int)($tg['remote_active'] ?? 0) ?></td></tr>
-        <tr><td class="k">Verwaiste Datasets</td><td class="v"><?= $orphans ?></td></tr>
+        <tr><td class="k">Verwaiste Datasets</td><td class="v"><?= $orphans ?> Ziel<?php if ($srcOrphans > 0): ?>, <?= $srcOrphans ?> Quelle außer Betrieb<?php endif; ?></td></tr>
       </table>
     </div>
 

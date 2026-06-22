@@ -4633,54 +4633,65 @@ simulate_dataset() {
     done
 }
 
+# Eine Verwaisten-Sektion kompakt ausgeben: Kopfzeile mit Anzahl, darunter die
+# Namen NUR bei wenigen Einträgen (bis 8), sonst Verweis auf --cleanup-orphans.
+# $1 = Label (z. B. "Quelle" oder "<label> [remote]"), $2 = Beschreibung der
+# Einträge; Liste der Namen von stdin. Setzt SIM_ORPHAN_FOUND/-TRUNCATED.
+sim_orphan_section() {
+    local label="$1" desc="$2"
+    local -a items=()
+    local line
+    while read -r line; do [ -n "$line" ] && items+=("$line"); done
+    local n=${#items[@]}
+    [ "$n" -eq 0 ] && return 0
+    SIM_ORPHAN_FOUND=1
+    printf "  %s: %s %s\n" "$label" "$n" "$desc"
+    if [ "$n" -le 8 ]; then
+        for line in "${items[@]}"; do printf "      %s\n" "$line"; done
+    else
+        SIM_ORPHAN_TRUNCATED=1
+    fi
+}
+
 # Vorschau der außer Betrieb genommenen / verwaisten Datasets, die ein Lauf nur
-# MELDEN (nicht löschen) würde – Quelle und ALLE aktiven Ziele. Remote-Ziele
-# werden dafür wie beim echten Lauf bereitgemacht (ggf. per Wake-on-LAN geweckt),
-# damit die Simulation denselben Stand wie --cleanup-orphans zeigt. Ist ein Remote
-# nicht erreichbar, wird er übersprungen (mit Hinweis), statt die Simulation zu
-# blockieren. Aus dem Backup-Umfang gefallene Datasets werden NIE automatisch
-# bereinigt; Aufräumen nur über die Wartung.
+# MELDEN (nicht löschen) würde – Quelle und ALLE aktiven Ziele. Erreichbarkeit der
+# Remote-/Borg-Ziele wurde in simulate() vorab ermittelt (Remote ggf. geweckt).
+# Übersichtlich gehalten: je Sektion nur eine Anzahl-Zeile, Namen nur bei wenigen
+# Einträgen; die vollständige Liste liefert --cleanup-orphans. Aus dem Umfang
+# gefallene Datasets werden NIE automatisch bereinigt; Aufräumen nur über Wartung.
 simulate_orphan_datasets() {
     local target_id
-    local target
-    local source_ds
     local type
-    local found=0
+    SIM_ORPHAN_FOUND=0
+    SIM_ORPHAN_TRUNCATED=0
 
     echo
     echo "Außer Betrieb / verwaist (würde gemeldet, NICHT gelöscht):"
 
     # Quelle: aus dem Umfang gefallene Datasets mit verbliebenen Snapshots.
-    while read -r source_ds; do
-        [ -n "$source_ds" ] || continue
-        printf "  Quelle würde als verwaist gemeldet: %s (Restsnapshots bleiben)\n" "$source_ds"
-        found=1
-    done < <(list_source_orphan_datasets)
+    sim_orphan_section "Quelle" "Quell-Dataset(s) außer Betrieb (Restsnapshots bleiben)" \
+        < <(list_source_orphan_datasets)
 
-    # Ziele (lokal + remote). Remote wird wie im Lauf geweckt; nicht erreichbare
-    # Remotes werden mit Hinweis übersprungen.
+    # Ziele (lokal + remote; borg hat keine Ziel-Datasets).
     for target_id in "${TARGETS[@]}"; do
         target_enabled "$target_id" || continue
         type=$(target_type "$target_id")
         case "$type" in local|remote) ;; *) continue ;; esac
         load_target_context "$target_id" || continue
 
-        # Erreichbarkeit wurde in simulate() vorab ermittelt (Remote geweckt).
         case "$SIM_UNREACHABLE_IDS" in
             *"|${target_id}|"*)
-                printf "  %s: Ziel nicht erreichbar – Verwaisten-Prüfung übersprungen\n" "$(target_label "$target_id")"
+                printf "  %s [%s]: Ziel nicht erreichbar – Verwaisten-Prüfung übersprungen\n" "$(target_label "$target_id")" "$type"
                 continue ;;
         esac
         [ "$type" = "local" ] && { zfs list "$LOCAL_BACKUP_POOL" >/dev/null 2>&1 || continue; }
 
-        while read -r target; do
-            [ -n "$target" ] || continue
-            printf "  %s würde als verwaist gemeldet: %s\n" "$(target_label "$target_id")" "$target"
-            found=1
-        done < <(list_target_orphan_datasets "$target_id")
+        sim_orphan_section "$(target_label "$target_id") [$type]" "verwaiste Ziel-Dataset(s)" \
+            < <(list_target_orphan_datasets "$target_id")
     done
 
-    [ "$found" -eq 0 ] && echo "  Keine außer Betrieb genommenen / verwaisten Datasets"
+    [ "$SIM_ORPHAN_FOUND" -eq 0 ] && echo "  Keine außer Betrieb genommenen / verwaisten Datasets"
+    [ "$SIM_ORPHAN_TRUNCATED" -eq 1 ] && echo "  Vollständige Liste / Aufräumen: zfs-backup --cleanup-orphans"
 }
 
 run_snapshot_job() {

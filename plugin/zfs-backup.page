@@ -514,7 +514,7 @@ p.muted { color:#999; font-size:12px; }
 
 <?php if ($orphans > 0 || $srcOrphans > 0): ?>
   <div class="zb-warn">
-    ⚠ <?php if ($orphans > 0): ?><?= $orphans ?> verwaiste Ziel-Dataset(s) (Quelle gelöscht/außer Betrieb)<?php endif; ?><?php if ($orphans > 0 && $srcOrphans > 0): ?> und <?php endif; ?><?php if ($srcOrphans > 0): ?><?= $srcOrphans ?> außer Betrieb genommene(s) Quell-Dataset(s) mit Restsnapshots<?php endif; ?> (Stand letzter Lauf). Werden <strong>nicht</strong> automatisch gelöscht – Aufräumen über <em>Wartung → „Verwaiste Datasets anzeigen/löschen"</em>.
+    ⚠ <?php if ($orphans > 0): ?><?= $orphans ?> verwaiste Ziel-Dataset(s) (Quelle gelöscht/außer Betrieb)<?php endif; ?><?php if ($orphans > 0 && $srcOrphans > 0): ?> und <?php endif; ?><?php if ($srcOrphans > 0): ?><?= $srcOrphans ?> außer Betrieb genommene(s) Quell-Dataset(s) mit Restsnapshots<?php endif; ?> (Stand letzter Lauf). Werden <strong>nicht</strong> automatisch gelöscht – Aufräumen über <em>Wartung → „Verwaiste Datasets / Snapshots anzeigen/löschen"</em>.
   </div>
 <?php endif; ?>
 
@@ -910,9 +910,9 @@ p.muted { color:#999; font-size:12px; }
   $mmd .= zb_ed_md('Snapshots prüfen',
             'Verwaltete Snapshots gegen die Quelle abgleichen. Nach dem Klick wählst du den Umfang: alles (Quelle + alle Ziele), nur die Quelle oder ein einzelnes Ziel. Verändert nichts; ein Remote-Ziel wird dafür ggf. per WOL geweckt.',
             zb_maint_btn('verify-pick', 'Snapshots prüfen', 'Prüfen'));
-  $mmd .= zb_ed_md('Verwaiste Datasets anzeigen',
-            'Ziel-Datasets, deren Quell-Dataset nicht mehr existiert (z. B. gelöscht). Nach dem Klick wählst du das Ziel. Dry-Run – zeigt nur, was beim Aufräumen gelöscht würde, löscht nichts.',
-            zb_maint_btn('cleanup-orphans-dry', 'Verwaiste Datasets (Dry-Run)', 'Anzeigen'));
+  $mmd .= zb_ed_md('Verwaiste Datasets / Snapshots anzeigen',
+            'Verwaiste Ziel-Datasets (Quell-Dataset gelöscht oder außer Betrieb) und außer Betrieb genommene Quell-Datasets mit verbliebenen Snapshots. Nach dem Klick wählst du das Ziel. Dry-Run – zeigt nur, was beim Aufräumen passieren würde, löscht nichts.',
+            zb_maint_btn('cleanup-orphans-dry', 'Verwaiste Datasets / Snapshots (Dry-Run)', 'Anzeigen'));
 
   // Wartung (destruktiv): zusätzlich data-confirm + roter Knopf.
   $mmd .= "#### Wartung\n\n";
@@ -928,10 +928,10 @@ p.muted { color:#999; font-size:12px; }
             'Alle Logdateien entfernen.',
             zb_maint_btn('delete-logs', 'Logs löschen', 'Löschen',
               'Alle Logdateien wirklich löschen?', true));
-  $mmd .= zb_ed_md('Verwaiste Datasets löschen',
-            'Entfernt Ziel-Datasets, deren Quell-Dataset nicht mehr existiert (zfs destroy -r). Nach dem Klick wählst du das Ziel, danach folgt die Bestätigung. Vorher unbedingt „Verwaiste Datasets anzeigen" prüfen!',
-            zb_maint_btn('cleanup-orphans', 'Verwaiste Datasets löschen', 'Löschen',
-              'Verwaiste Ziel-Datasets wirklich löschen? Das entfernt die Backups gelöschter Quell-Datasets unwiderruflich (lokal und remote).', true,
+  $mmd .= zb_ed_md('Verwaiste Datasets / Snapshots löschen',
+            'Entfernt verwaiste Ziel-Datasets (Quell-Dataset gelöscht/außer Betrieb) komplett (zfs destroy -r) UND die verbliebenen verwalteten Snapshots außer Betrieb genommener Quell-Datasets (das Quell-Dataset selbst bleibt). Nach dem Klick wählst du das Ziel, danach folgt die Bestätigung. Vorher unbedingt „Verwaiste Datasets / Snapshots anzeigen" prüfen!',
+            zb_maint_btn('cleanup-orphans', 'Verwaiste Datasets / Snapshots löschen', 'Löschen',
+              'Verwaiste Datasets und Snapshots wirklich löschen? Das entfernt die Backups gelöschter/abgewählter Quell-Datasets (lokal und remote) sowie Restsnapshots auf der Quelle unwiderruflich.', true,
               'VERWAISTE LOESCHEN'));
   $mmd .= zb_ed_md('Historie ausdünnen',
             'Erzeugt je aktivem Typ (Retention > 0) einen frischen Anker mit aktuellem Stand (hourly/daily/weekly/monthly/yearly), behält nur diese, Ziele nachziehen. Ältere verwaltete Snapshots werden entfernt.',
@@ -2000,8 +2000,8 @@ p.muted { color:#999; font-size:12px; }
       // Orphan-Aktionen: erst Ziel im Popup wählen, dann ausführen.
       if (act === 'cleanup-orphans' || act === 'cleanup-orphans-dry') {
         var del = (act === 'cleanup-orphans');
-        zbOrphanPick(del ? 'Verwaiste Datasets löschen – Ziel wählen'
-                         : 'Verwaiste Datasets anzeigen – Ziel wählen',
+        zbOrphanPick(del ? 'Verwaiste Datasets / Snapshots löschen – Ziel wählen'
+                         : 'Verwaiste Datasets / Snapshots anzeigen – Ziel wählen',
                      function(target){ zbMaintExecute(btn, target); });
         return;
       }

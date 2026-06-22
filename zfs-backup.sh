@@ -1884,7 +1884,7 @@ notify_orphans() {
 
     send_unraid_notify \
         "ZFS Backup: verwaiste Datasets" \
-        "${t} verwaiste Ziel-Dataset(s) (Quelle gelöscht/außer Betrieb) und ${s} außer Betrieb genommene(s) Quell-Dataset(s) mit Restsnapshots gefunden. Werden NICHT automatisch gelöscht – Aufräumen über die Wartung (Verwaiste Datasets)." \
+        "${t} verwaiste Ziel-Dataset(s) (Quelle gelöscht/außer Betrieb) und ${s} außer Betrieb genommene(s) Quell-Dataset(s) mit Restsnapshots gefunden. Werden NICHT automatisch gelöscht – Aufräumen über die Wartung (Verwaiste Datasets / Snapshots)." \
         "$NOTIFY_ORPHANS"
 }
 

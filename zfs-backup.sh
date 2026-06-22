@@ -6848,6 +6848,44 @@ maintenance_delete_borg_target_archives() {
     done
 }
 
+# Anbieter-Vorlagen für borg-Ziele (Datenquelle der GUI; --borg-providers --json).
+# Je Anbieter: id, label, Repo-URL-Platzhalter, Default-SSH-Optionen, Setup-Schritte
+# (anzeigbare Anleitung) und ein Hinweis. Statisch – ein neuer Anbieter kommt als
+# weiterer Block dazu. Reines JSON, kein jq nötig.
+borg_providers_json() {
+    cat <<'JSON'
+[
+  {
+    "id":"hetzner",
+    "label":"Hetzner Storage Box",
+    "repo_placeholder":"ssh://uXXXXX@uXXXXX.your-storagebox.de:23/home/<verzeichnis>",
+    "ssh_options":"-i /root/.ssh/zfs_backup_ed25519 -o BatchMode=yes -o ConnectTimeout=10",
+    "steps":[
+      "An der Storage Box „SSH support“ aktivieren (Hetzner-Konsole/Robot).",
+      "SSH-Key erzeugen (oder bestehenden nutzen): ssh-keygen -t ed25519 -f /root/.ssh/zfs_backup_ed25519 -N \"\"",
+      "Pubkey hochladen (einmalig, fragt nach dem Box-Passwort): cat /root/.ssh/zfs_backup_ed25519.pub | ssh -p 23 uXXXXX@uXXXXX.your-storagebox.de install-ssh-key",
+      "Falls das Repo neu ist, einmalig anlegen: borg init --encryption=repokey (mit denselben Zugangsdaten).",
+      "Repo-URL und Passphrase oben eintragen, dann „Testen“."
+    ],
+    "note":"Der Port (23) steckt in der Repo-URL. /root/.ssh ist auf Unraid reboot-persistent (Symlink auf den USB-Stick)."
+  },
+  {
+    "id":"generic",
+    "label":"Generischer SSH-Host / anderer Anbieter",
+    "repo_placeholder":"ssh://user@host:22/pfad/zum/repo",
+    "ssh_options":"-o BatchMode=yes -o ConnectTimeout=10",
+    "steps":[
+      "Auf dem Zielhost muss borg installiert sein (Zugriff über „borg serve“ per SSH).",
+      "Passwortlosen SSH-Key einrichten (z. B. ssh-copy-id) – headless, ohne Key-Passphrase.",
+      "Falls das Repo neu ist, einmalig anlegen: borg init --encryption=repokey.",
+      "Repo-URL und Passphrase oben eintragen, dann „Testen“."
+    ],
+    "note":"Bei abweichendem SSH-Port diesen in der Repo-URL angeben (ssh://…:PORT/…)."
+  }
+]
+JSON
+}
+
 ########################################
 # Verify
 ########################################
@@ -7711,6 +7749,13 @@ handle_cli() {
             else
                 config_schema_text
             fi
+            exit 0
+            ;;
+
+        --borg-providers)
+
+            # Anbieter-Vorlagen für borg-Ziele (Datenquelle der GUI). Reines JSON.
+            borg_providers_json
             exit 0
             ;;
 
@@ -8663,7 +8708,7 @@ fi
 # Befehlen, die das brauchen (Lauf/Pflege/Schreiben). Reine Lese-Befehle, die die
 # GUI beim Seitenaufbau mehrfach aufruft, überspringen das (Performance).
 case "$1" in
-    --version|--help|--status|--gui-init|--capacity|--datasets|--snapshots|--snapshot-tree|--dataset-snapshots|--snapshot-ls|--snapshot-cat|--targets|--config-schema|--get-config|--log-tail|--log-follow|--progress-follow|--check-stale)
+    --version|--help|--status|--gui-init|--capacity|--datasets|--snapshots|--snapshot-tree|--dataset-snapshots|--snapshot-ls|--snapshot-cat|--targets|--config-schema|--borg-providers|--get-config|--log-tail|--log-follow|--progress-follow|--check-stale)
         ;;
     *)
         config_maintain
@@ -8674,7 +8719,7 @@ esac
 # wird blockiert, bis die Config geprüft wurde.
 if [ "$CONFIG_UPDATED" -eq 1 ]; then
     case "$1" in
-        --help|--version|--status|--gui-init|--check-stale|--capacity|--datasets|--snapshots|--targets|--dataset-snapshots|--snapshot-tree|--snapshot-ls|--snapshot-cat|--snapshot-restore|--log-tail|--log-follow|--progress-follow|--config-check|--config-schema|--get-config|--set-config|--add-target|--delete-target|--edit-target|--test-target|--reorder-targets|--move-target|--reset-statistics|--reset-run-status|--delete-logs|--thin-history|--delete-managed-snapshots|--cleanup-orphans)
+        --help|--version|--status|--gui-init|--check-stale|--capacity|--datasets|--snapshots|--targets|--dataset-snapshots|--snapshot-tree|--snapshot-ls|--snapshot-cat|--snapshot-restore|--log-tail|--log-follow|--progress-follow|--config-check|--config-schema|--borg-providers|--get-config|--set-config|--add-target|--delete-target|--edit-target|--test-target|--reorder-targets|--move-target|--reset-statistics|--reset-run-status|--delete-logs|--thin-history|--delete-managed-snapshots|--cleanup-orphans)
             ;;
         *)
             echo

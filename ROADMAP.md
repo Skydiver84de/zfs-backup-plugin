@@ -12,25 +12,24 @@ des Datasets. Passphrase liegt als Config-Feld (conf bleibt 600). Ein gemeinsame
 Repo hält mehrere Datasets namespaced (Wiederverwendung des bestehenden Repos).
 
 **Noch offen:**
-* **Anbieter-Vorlagen (Provider-Presets):** Beim Anlegen eines borg-Ziels eine
-  Vorlage je Anbieter anbieten, beginnend mit **Hetzner Storage Box** – weil
-  Repo-URL-Muster, Port, Key-Upload und Caveats anbieter­spezifisch sind. Eine
-  Vorlage bringt mit: Repo-URL-Muster/Port, Default-`SSH_OPTIONS`, die
-  Setup-Schritte (Key-Upload via Hetzners `install-ssh-key`, Host-Key, `borg init`)
-  als anzeigbare Anleitung und Hinweise (z. B. „SSH support" an der Box aktivieren).
-  Weitere: rsync.net, BorgBase, generischer SSH-Host. GUI-Auswahl füllt die Felder
-  vor und zeigt die Anleitung; CLI-Variante denkbar (`--add-target … --provider
-  hetzner` bzw. ein Befehl, der die Schritte druckt).
-* **GUI (PHP):** Zieltyp `borg` in der Ziele-Seite (Anlegen/Bearbeiten,
-  Passphrase-Feld), Provider-Auswahl (s. o.), Repo-Status; Snapshots-/Kapazitäts-
-  Ansicht optional.
-* **Verify/Restore** für borg-Archive (`borg extract`/`borg mount`).
+* **Verify/Restore** für borg-Archive (`borg extract`/`borg mount`) – inkl.
+  Anzeige der Archive (z. B. `--borg-archives`) und Restore-Pfad in der GUI.
+* **Snapshots-/Kapazitäts-Ansicht** für borg-Ziele in der GUI (optional).
 * **Docs/CHANGELOG** beim Release.
 
-Die **Binary-Bereitstellung** ist erledigt: `plugin/borg-setup.sh` lädt eine
-gepinnte, SHA256-verifizierte Standalone-Binary nach `<RUNTIME_DIR>/borg/`
-(Pool → persistent), ausgelöst von `install.sh` beim Array-Start (sofern ein
-borg-Ziel konfiguriert ist) bzw. bedarfsweise vom Skript.
+**Erledigt:**
+* **Binary-Bereitstellung:** `plugin/borg-setup.sh` lädt eine gepinnte,
+  SHA256-verifizierte Standalone-Binary nach `<RUNTIME_DIR>/borg/` (Pool →
+  persistent), ausgelöst von `install.sh` beim Array-Start (sofern ein borg-Ziel
+  konfiguriert ist) bzw. bedarfsweise vom Skript.
+* **GUI (PHP):** Zieltyp `borg` in der Ziele-Seite – Anlegen über „Ziel
+  hinzufügen" (Typ borg), Bearbeiten (Repo, Passphrase, SSH-Optionen, Compact),
+  Testen, Tabellen-/Status-Anzeige.
+* **Anbieter-Vorlagen (Provider-Presets):** Datenquelle `--borg-providers --json`
+  (Start: Hetzner Storage Box + generischer SSH-Host). Die GUI-Auswahl füllt
+  Repo-URL-Muster und `SSH_OPTIONS` vor und zeigt die Einrichtungsschritte
+  (Key-Upload via Hetzners `install-ssh-key`, `borg init`, Caveats). Weitere
+  Anbieter (rsync.net, BorgBase) kommen als weitere Blöcke dazu.
 
 ### Ursprüngliche Planung (Referenz)
 

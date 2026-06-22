@@ -182,9 +182,14 @@ TARGET_3_SSH_OPTIONS="-o BatchMode=yes -o ConnectTimeout=10"
 TARGET_3_COMPACT_EVERY=10
 ```
 
-> **Stand:** Engine und CLI sind vollständig; die Pflege läuft aktuell über die
-> CLI-Befehle. GUI-Integration und der Verify/Restore-Pfad für borg-Archive sind
-> in Arbeit (siehe ROADMAP).
+In der **GUI** (Settings → ZFS Backup → Ziele) legst du ein borg-Ziel über „Ziel
+hinzufügen" → Typ **borg** an: Eine **Anbieter-Vorlage** (z. B. Hetzner Storage Box)
+füllt Repo-URL-Muster und SSH-Optionen vor und zeigt die Einrichtungsschritte;
+Repo-URL, Passphrase, SSH-Optionen und das Compact-Intervall lassen sich dort und
+später über „Bearbeiten" pflegen. „Testen" prüft das Repo wie `--test-target`.
+
+> **Stand:** Engine, CLI und GUI (inkl. Anbieter-Vorlagen) sind vollständig. Der
+> Verify/Restore-Pfad für borg-Archive ist noch in Arbeit (siehe ROADMAP).
 
 ### Verwaiste / außer Betrieb genommene Datasets
 

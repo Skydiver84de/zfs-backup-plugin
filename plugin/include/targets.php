@@ -54,6 +54,22 @@ function zb_run(string $cli, array $args): array {
     return [$rc === 0, trim(implode("\n", $out))];
 }
 
+/* Höchste vorhandene (numerische) Ziel-ID = die zuletzt angelegte, da IDs
+ * lückenlos 1..N vergeben werden. Liefert '' wenn keine/Fehler. */
+function zb_last_target_id(string $cli): string {
+    $out = [];
+    exec(escapeshellarg($cli) . ' --targets --json 2>/dev/null', $out);
+    $arr = json_decode(implode("\n", $out), true);
+    $max = 0;
+    if (is_array($arr)) {
+        foreach ($arr as $t) {
+            $iid = (int)($t['id'] ?? 0);
+            if ($iid > $max) $max = $iid;
+        }
+    }
+    return $max > 0 ? (string)$max : '';
+}
+
 switch ($action) {
 
     case 'add':
@@ -70,6 +86,37 @@ switch ($action) {
         if ($type === 'remote' && $host !== '') $args[] = $host;
         list($ok, $msg) = zb_run($cli, $args);
         echo json_encode(['ok' => $ok, 'msg' => $msg]);
+        break;
+
+    case 'add-borg':
+        /* Borg-Ziel atomar anlegen: --add-target <label> borg <repo>, danach die
+         * borg-Felder per --edit-target. Repo geht als „base"-Slot in --add-target.
+         * Validierung bleibt im Kern (target_create/target_edit_field). */
+        $label = (string)($_POST['label'] ?? '');
+        $repo  = (string)($_POST['repo'] ?? '');
+        $pass  = (string)($_POST['pass'] ?? '');
+        $ssh   = (string)($_POST['ssh'] ?? '');
+        $compact = (string)($_POST['compact'] ?? '');
+        if ($label === '' || $repo === '') {
+            http_response_code(400);
+            echo json_encode(['ok' => false, 'msg' => 'Bezeichnung und Repo-URL sind erforderlich.']);
+            break;
+        }
+        list($ok, $msg) = zb_run($cli, ['--add-target', $label, 'borg', $repo]);
+        if (!$ok) { echo json_encode(['ok' => false, 'msg' => $msg]); break; }
+        $newId = zb_last_target_id($cli);
+        if ($newId === '') { echo json_encode(['ok' => false, 'msg' => 'Ziel angelegt, aber ID nicht ermittelbar.']); break; }
+        $errs = [];
+        foreach ([['SSH_OPTIONS', $ssh], ['COMPACT_EVERY', $compact], ['PASSPHRASE', $pass]] as $f) {
+            if ($f[1] === '') continue;   // leer = Default/ungesetzt lassen
+            list($eok, $emsg) = zb_run($cli, ['--edit-target', $newId, $f[0], $f[1]]);
+            if (!$eok) $errs[] = $f[0] . ': ' . $emsg;
+        }
+        if ($errs) {
+            echo json_encode(['ok' => false, 'msg' => "Ziel angelegt (ID $newId), aber: " . implode('; ', $errs)]);
+        } else {
+            echo json_encode(['ok' => true, 'msg' => "Borg-Ziel angelegt (ID $newId).", 'id' => $newId]);
+        }
         break;
 
     case 'delete':

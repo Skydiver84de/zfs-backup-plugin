@@ -84,6 +84,14 @@ function zb_ed_num(string $field, $val): string {
 function zb_ed_bool(string $field, $on): string {
     return zb_input('data-field', $field, 'bool', $on ? 'yes' : 'no');
 }
+/* Passwort-/Secret-Feld für den Ziel-Editor (z. B. borg PASSPHRASE). data-orig
+ * bleibt leer: ein leer gelassenes Feld zählt als „unverändert" und wird von
+ * saveEdit nicht gesendet (die gespeicherte Passphrase bleibt also erhalten). */
+function zb_ed_secret(string $field, bool $isSet): string {
+    return '<input type="password" autocomplete="new-password" data-field="' . zb_a($field)
+         . '" data-type="secret" data-orig="" value="" placeholder="'
+         . ($isSet ? 'gesetzt – leer lassen, um zu behalten' : 'nicht gesetzt') . '">';
+}
 
 /* Eingabefeld für eine Konfig-Option (data-name). array/secret sind Konfig-
  * spezifisch, der Rest läuft über zb_input(). */
@@ -161,6 +169,10 @@ $cap     = $gui['capacity'] ?? null;
 $schema  = $gui['schema']   ?? null;
 $values  = $gui['values']   ?? null;
 $targets = $gui['targets']  ?? null;
+
+// Anbieter-Vorlagen für borg-Ziele (Datenquelle für das Hinzufügen-Formular).
+list($borgProviders, ) = zb_json('--borg-providers');
+if (!is_array($borgProviders)) { $borgProviders = []; }
 
 /* CSRF-Token für den Speicher-Endpoint. In Unraid-Seiten stellt der PageBuilder
  * das geparste var.ini als globales $var bereit – das ist die zuverlässige
@@ -316,6 +328,9 @@ $csrf = $var['csrf_token'] ?? '';
 .zb-tg .rowmsg.err { color:#E57373; }
 .zb-tg .rowmsg.ok  { color:#81C784; }
 .zb-addtg { max-width:560px; }
+.zb-borg-steps { margin:6px 0 2px; padding:8px 10px; border-left:3px solid var(--zb-accent,#1c7); background:rgba(0,0,0,.04); border-radius:4px; font-size:.92em; }
+.zb-borg-steps ol { margin:4px 0 4px 1.2em; padding:0; }
+.zb-borg-steps li { margin:2px 0; word-break:break-word; }
 p.muted { color:#999; font-size:12px; }
 
 /* Wartung: Aktions-Knöpfe (Zeilen aus nativem markdown wie Konfig). Breite
@@ -727,7 +742,13 @@ p.muted { color:#999; font-size:12px; }
           <?php if (is_array($rem)): ?><br><span class="muted">Host: <?= zb_h($rem['host'] ?? null) ?></span><?php endif; ?>
         </td>
         <td><?= zb_h($t['type'] ?? null) ?></td>
-        <td><?= zb_h($t['base_dataset'] ?? null) ?></td>
+        <td><?php
+              if (($t['type'] ?? '') === 'borg') {
+                  echo zb_h($t['borg']['repo'] ?? '');
+              } else {
+                  echo zb_h($t['base_dataset'] ?? null);
+              }
+            ?></td>
         <td>
           <label class="zb-switch">
             <input type="checkbox" class="zb-enabled" <?= !empty($t['enabled']) ? 'checked' : '' ?>>
@@ -752,8 +773,20 @@ p.muted { color:#999; font-size:12px; }
             <h3>Ziel bearbeiten — <?= zb_h($tid) ?></h3>
 
             <?php
+              $isBorg = (($t['type'] ?? '') === 'borg');
+              $bg     = $t['borg'] ?? null;
               $emd  = zb_ed_md('Bezeichnung', 'LABEL – frei wählbarer Anzeigename.',
                                zb_ed_text('LABEL', $t['label'] ?? '', $tid));
+              if ($isBorg) {
+                  $emd .= zb_ed_md('Repo-URL', 'REPO – Borg-Repository, z. B. ssh://user@host:23/pfad.',
+                                   zb_ed_text('REPO', $bg['repo'] ?? '', 'ssh://user@host:23/pfad'));
+                  $emd .= zb_ed_md('Passphrase', 'PASSPHRASE – Passphrase des Repos. Leer lassen behält die gespeicherte.',
+                                   zb_ed_secret('PASSPHRASE', !empty($bg['passphrase_set'])));
+                  $emd .= zb_ed_md('SSH-Optionen', 'SSH_OPTIONS – für die borg-SSH-Verbindung (BORG_RSH), z. B. -i /root/.ssh/key -o BatchMode=yes.',
+                                   zb_ed_text('SSH_OPTIONS', $bg['ssh_options'] ?? ''));
+                  $emd .= zb_ed_md('Compact alle N Läufe', 'COMPACT_EVERY – borg compact gibt Speicher frei (0 = nie).',
+                                   zb_ed_num('COMPACT_EVERY', $bg['compact_every'] ?? 0));
+              } else {
               $emd .= zb_ed_md('Ziel-Dataset', 'BASE_DATASET – Basis-Dataset auf dem Ziel.',
                                zb_ed_text('BASE_DATASET', $t['base_dataset'] ?? ''));
               if ($isRem) {
@@ -781,6 +814,7 @@ p.muted { color:#999; font-size:12px; }
                   $emd .= zb_ed_md('Wartezeit (s)', 'RETRY_WAIT_SECONDS – Pause zwischen den Versuchen.',
                                    zb_ed_num('RETRY_WAIT_SECONDS', $rem['retry_wait_seconds'] ?? 0));
               }
+              } // Ende: nicht-borg
               echo zb_md($emd);
             ?>
 
@@ -799,21 +833,44 @@ p.muted { color:#999; font-size:12px; }
   <div class="zb-grp zb-addtg">
     <h3>Ziel hinzufügen</h3>
     <?php
-      // Label / Typ / Ziel-Dataset als nativer Markdown-Block; die SSH-Host-Zeile
-      // steckt in einem eigenen Block (Toggle-div), da sie nur bei Remote gilt.
+      // Label / Typ als nativer Markdown-Block; die typ-spezifischen Zeilen stecken
+      // in eigenen Toggle-divs (Ziel-Dataset bzw. SSH-Host bzw. borg-Felder).
       // Die ID wird automatisch (numerisch) vergeben – der Nutzer wählt nur das Label.
       $amd  = zb_ed_md('Bezeichnung', 'Frei wählbarer Anzeigename (LABEL).',
                        '<input type="text" id="add-label" placeholder="z. B. nas2">');
       $amd .= zb_ed_md('Typ', '',
-                       '<select id="add-type"><option value="local">local</option><option value="remote">remote</option></select>');
-      $amd .= zb_ed_md('Ziel-Dataset', 'Basis-Dataset auf dem Ziel (BASE_DATASET).',
-                       '<input type="text" id="add-base" placeholder="z. B. backups oder files/nas1">');
+                       '<select id="add-type"><option value="local">local</option><option value="remote">remote</option><option value="borg">borg (Offsite)</option></select>');
       echo zb_md($amd);
 
+      // Ziel-Dataset (nur local/remote).
+      $amdBase = zb_ed_md('Ziel-Dataset', 'Basis-Dataset auf dem Ziel (BASE_DATASET).',
+                          '<input type="text" id="add-base" placeholder="z. B. backups oder files/nas1">');
+      // SSH-Host (nur remote).
       $amdHost = zb_ed_md('SSH-Host', 'Nur Remote, z. B. root@192.168.1.2.',
                           '<input type="text" id="add-host" placeholder="root@host">');
+
+      // Borg-Felder (nur borg). Provider-Auswahl füllt Repo-Muster + SSH-Optionen vor.
+      $provSel = '<select id="add-borg-provider"><option value="">– Anbieter wählen –</option>';
+      foreach ($borgProviders as $p) {
+          $provSel .= '<option value="' . zb_a($p['id'] ?? '') . '">' . zb_h($p['label'] ?? ($p['id'] ?? '')) . '</option>';
+      }
+      $provSel .= '</select>';
+      $amdBorg  = zb_ed_md('Anbieter-Vorlage', 'Füllt Repo-URL-Muster und SSH-Optionen vor und zeigt die Einrichtungsschritte.', $provSel);
+      $amdBorg .= zb_ed_md('Repo-URL', 'Borg-Repository, z. B. ssh://user@host:23/pfad (REPO).',
+                           '<input type="text" id="add-borg-repo" placeholder="ssh://user@host:23/pfad">');
+      $amdBorg .= zb_ed_md('Passphrase', 'Passphrase des Repos (PASSPHRASE).',
+                           '<input type="password" id="add-borg-pass" autocomplete="new-password" placeholder="Repo-Passphrase">');
+      $amdBorg .= zb_ed_md('SSH-Optionen', 'Für die borg-SSH-Verbindung (SSH_OPTIONS), z. B. -i /root/.ssh/key -o BatchMode=yes.',
+                           '<input type="text" id="add-borg-ssh" placeholder="-i /root/.ssh/zfs_backup_ed25519 -o BatchMode=yes">');
+      $amdBorg .= zb_ed_md('Compact alle N Läufe', 'borg compact gibt Speicher frei (COMPACT_EVERY; 0 = nie).',
+                           '<input type="number" id="add-borg-compact" min="0" step="1" value="10">');
     ?>
+    <div id="add-base-row"><?= zb_md($amdBase) ?></div>
     <div id="add-host-row" style="display:none"><?= zb_md($amdHost) ?></div>
+    <div id="add-borg-row" style="display:none">
+      <?= zb_md($amdBorg) ?>
+      <div id="add-borg-steps" class="zb-borg-steps" style="display:none"></div>
+    </div>
     <div class="zb-savebar">
       <input type="button" id="add-btn" value="Hinzufügen">
       <span class="zb-savemsg" id="add-msg"></span>
@@ -2010,12 +2067,43 @@ p.muted { color:#999; font-size:12px; }
     });
   }
 
-  // „Ziel hinzufügen": Host-Zeile nur bei Remote zeigen.
+  // „Ziel hinzufügen": typ-spezifische Zeilen umschalten (Dataset/Host/borg).
+  var ZB_BORG_PROVIDERS = <?= json_encode(is_array($borgProviders) ? $borgProviders : []) ?>;
   var addType = document.getElementById('add-type');
+  var addBaseRow = document.getElementById('add-base-row');
   var addHostRow = document.getElementById('add-host-row');
-  if (addType && addHostRow) {
-    addType.addEventListener('change', function(){
-      addHostRow.style.display = (addType.value === 'remote') ? '' : 'none';
+  var addBorgRow = document.getElementById('add-borg-row');
+
+  function addTypeSync(){
+    var v = addType ? addType.value : 'local';
+    if (addBaseRow) addBaseRow.style.display = (v === 'borg') ? 'none' : '';
+    if (addHostRow) addHostRow.style.display = (v === 'remote') ? '' : 'none';
+    if (addBorgRow) addBorgRow.style.display = (v === 'borg') ? '' : 'none';
+  }
+  if (addType) { addType.addEventListener('change', addTypeSync); addTypeSync(); }
+
+  // Anbieter-Vorlage: Repo-Muster + SSH-Optionen vorbefüllen, Schritte einblenden.
+  var addProv = document.getElementById('add-borg-provider');
+  if (addProv) {
+    addProv.addEventListener('change', function(){
+      var p = null, i;
+      for (i = 0; i < ZB_BORG_PROVIDERS.length; i++) {
+        if (ZB_BORG_PROVIDERS[i].id === addProv.value) { p = ZB_BORG_PROVIDERS[i]; break; }
+      }
+      var repo = document.getElementById('add-borg-repo');
+      var ssh  = document.getElementById('add-borg-ssh');
+      var steps = document.getElementById('add-borg-steps');
+      if (!p) { if (steps) { steps.style.display = 'none'; steps.innerHTML = ''; } return; }
+      if (repo) repo.placeholder = p.repo_placeholder || '';
+      if (ssh && p.ssh_options) ssh.value = p.ssh_options;   // überschreibt bewusst
+      if (steps) {
+        var html = '<strong>Einrichtung – ' + zbEsc(p.label || '') + ':</strong><ol>';
+        (p.steps || []).forEach(function(s){ html += '<li>' + zbEsc(s) + '</li>'; });
+        html += '</ol>';
+        if (p.note) html += '<p class="muted">' + zbEsc(p.note) + '</p>';
+        steps.innerHTML = html;
+        steps.style.display = '';
+      }
     });
   }
 
@@ -2023,22 +2111,32 @@ p.muted { color:#999; font-size:12px; }
   if (addBtn) {
     addBtn.addEventListener('click', function(){
       var amsg = document.getElementById('add-msg');
-      var params = {
-        action: 'add',
-        label: (document.getElementById('add-label').value || '').trim(),
-        type: document.getElementById('add-type').value,
-        base: (document.getElementById('add-base').value || '').trim(),
-        host: (document.getElementById('add-host').value || '').trim()
-      };
-      if (!params.label || !params.base) {
-        amsg.className='zb-savemsg err'; amsg.textContent='Bezeichnung und Ziel-Dataset sind erforderlich.'; return;
-      }
-      amsg.className='zb-savemsg'; amsg.textContent='Lege an …'; addBtn.disabled = true;
-      zbPost(TG_URL, params).then(function(r){
+      var label = (document.getElementById('add-label').value || '').trim();
+      var type  = addType.value;
+      if (!label) { amsg.className='zb-savemsg err'; amsg.textContent='Bezeichnung ist erforderlich.'; return; }
+
+      function done(r){
         addBtn.disabled = false;
         if (r.data && r.data.ok) { location.hash = 'targets'; location.reload(); }
         else { amsg.className='zb-savemsg err'; amsg.textContent = (r.data && (r.data.msg || r.data.error)) || 'Fehler'; }
-      });
+      }
+
+      if (type === 'borg') {
+        var repo = (document.getElementById('add-borg-repo').value || '').trim();
+        var pass = document.getElementById('add-borg-pass').value || '';
+        var ssh  = (document.getElementById('add-borg-ssh').value || '').trim();
+        var compact = (document.getElementById('add-borg-compact').value || '').trim();
+        if (!repo) { amsg.className='zb-savemsg err'; amsg.textContent='Repo-URL ist erforderlich.'; return; }
+        amsg.className='zb-savemsg'; amsg.textContent='Lege an …'; addBtn.disabled = true;
+        zbPost(TG_URL, { action:'add-borg', label:label, repo:repo, pass:pass, ssh:ssh, compact:compact }).then(done);
+        return;
+      }
+
+      var base = (document.getElementById('add-base').value || '').trim();
+      var host = (document.getElementById('add-host').value || '').trim();
+      if (!base) { amsg.className='zb-savemsg err'; amsg.textContent='Ziel-Dataset ist erforderlich.'; return; }
+      amsg.className='zb-savemsg'; amsg.textContent='Lege an …'; addBtn.disabled = true;
+      zbPost(TG_URL, { action:'add', label:label, type:type, base:base, host:host }).then(done);
     });
   }
 

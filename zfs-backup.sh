@@ -6728,13 +6728,48 @@ borg_archive_exists() {
     return 1
 }
 
+# Liest borgs --log-json-Fortschritt (stderr) von stdin und meldet ihn als
+# Lauf-Fortschritt: bei bekannter Gesamtgröße ($1, referenced) in %, sonst die
+# verarbeitete Menge. $2 = Label (Archivname). Sonstige Meldungen (Warnungen) ins
+# Log. Pendant zu transfer_progress_from_pv, nur für borg create.
+borg_create_progress() {
+    local total="$1" label="$2" line orig pct last="-1" step msg compact
+    compact=$(compact_transfer_label "$label")
+    while IFS= read -r line; do
+        case "$line" in
+            *'"archive_progress"'*)
+                case "$line" in *'"finished"'*) continue ;; esac
+                orig=$(printf '%s' "$line" | sed -n 's/.*"original_size"[^0-9]*\([0-9][0-9]*\).*/\1/p')
+                case "$orig" in ''|*[!0-9]*) continue ;; esac
+                if [ "$total" -gt 0 ] 2>/dev/null; then
+                    pct=$(( orig * 100 / total )); [ "$pct" -gt 100 ] && pct=100
+                    [ "$pct" = "$last" ] && continue
+                    last="$pct"
+                    console_stream_status "Borg-Übertragung: ${compact} ${pct}%"
+                else
+                    step=$(( orig / 52428800 ))   # je ~50 MiB eine Meldung
+                    [ "$step" = "$last" ] && continue
+                    last="$step"
+                    console_stream_status "Borg-Übertragung: ${compact} $(format_bytes "$orig")"
+                fi
+                ;;
+            *'"log_message"'*)
+                msg=$(printf '%s' "$line" | sed -n 's/.*"message"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+                [ -n "$msg" ] && log "Borg create ${label}: ${msg}"
+                ;;
+            *'"type"'*) : ;;   # andere strukturierte Events ignorieren
+            *) [ -n "$line" ] && log "Borg create ${label}: ${line}" ;;
+        esac
+    done
+}
+
 # Legt für jeden verwalteten Quell-Snapshot ohne Archiv ein borg-Archiv an. Liest
 # read-only aus <mountpoint>/.zfs/snapshot/<snap> – exakt der Pfad, den auch
 # Datei-Browser und Restore nutzen. Ein Fehler markiert das Dataset
 # (mark_borg_replication_failed) und blockiert dadurch sein Quell-Pruning.
 replicate_dataset_borg() {
     local ds="$1"
-    local snap name archive root rc _bsz _bo _bd
+    local snap name archive root rc _bsz _bo _bd _btotal
     local did_fail=0
 
     while IFS= read -r snap; do
@@ -6757,8 +6792,14 @@ replicate_dataset_borg() {
         fi
 
         log "Borg create: ${ds}@${name} -> ${BORG_REPO}::${archive}"
+        # Fortschritt: referenzierte Snapshot-Größe als Gesamtwert (schnell, aus
+        # ZFS-Metadaten – kein Datei-Walk). --log-json --progress lässt borg den
+        # Fortschritt strukturiert auf stderr melden -> borg_create_progress.
+        _btotal=$(zfs get -Hp -o value referenced "${ds}@${name}" 2>/dev/null)
+        case "$_btotal" in ''|*[!0-9]*) _btotal=0 ;; esac
         # cd in den Snapshot-Root, „." sichern -> Archiv enthält relative Pfade.
-        ( cd "$root" && borg_run create --one-file-system "::${archive}" . 2> >(log_stderr "Borg create ${archive}") )
+        ( cd "$root" && borg_run create --one-file-system --log-json --progress "::${archive}" . \
+            2> >(borg_create_progress "$_btotal" "$archive") )
         rc=$?
         if [ "$rc" -eq 0 ] || [ "$rc" -eq 1 ]; then
             [ "$rc" -eq 1 ] && log "Borg create Warnung (rc=1, fortgesetzt): ${archive}"

@@ -3363,9 +3363,11 @@ delete_all_managed_snapshots_apply() {
     write_gui_cache   # GUI-State neu schreiben (Remote ist wach -> live gezählt)
     if [ "$MAINTENANCE_SNAPSHOT_ERRORS" -eq 0 ]; then
         console_success "Snapshots gelöscht: ${MAINTENANCE_SNAPSHOTS_DELETED} gelöscht, 0 Fehler"
+        log "Verwaltete Snapshots gelöscht: ${MAINTENANCE_SNAPSHOTS_DELETED} gelöscht, 0 Fehler"
         return 0
     fi
     console_error "Snapshots löschen abgeschlossen: ${MAINTENANCE_SNAPSHOTS_DELETED} gelöscht, ${MAINTENANCE_SNAPSHOT_ERRORS} Fehler"
+    log "Verwaltete Snapshots gelöscht: ${MAINTENANCE_SNAPSHOTS_DELETED} gelöscht, ${MAINTENANCE_SNAPSHOT_ERRORS} Fehler"
     return 1
 }
 
@@ -3446,6 +3448,7 @@ thin_snapshot_history_apply() {
     write_gui_cache   # GUI-State neu schreiben (Remote ist wach -> live gezählt)
     console_success "Snapshot-Historie ausgedünnt"
     console_info "Gelöscht/entfernt: Quelle $((DELETED_SNAPSHOTS-before_source)), Lokal $((LOCAL_DELETED_SNAPSHOTS-before_local)), Remote $((REMOTE_DELETED_SNAPSHOTS-before_remote))"
+    log "Snapshot-Historie ausgedünnt: Quelle $((DELETED_SNAPSHOTS-before_source)), Lokal $((LOCAL_DELETED_SNAPSHOTS-before_local)), Remote $((REMOTE_DELETED_SNAPSHOTS-before_remote)) gelöscht/entfernt"
     return 0
 }
 
@@ -4927,6 +4930,8 @@ run_snapshot_job() {
 
     console_success "Snapshots geprüft: ${count} Datasets, ${created_total} Snapshots neu"
     console_info "Snapshot-Bestand Quelle: ${inv_total} verwaltete Snapshots (Hourly ${inv_h}, Daily ${inv_d}, Weekly ${inv_w}, Monthly ${inv_m}, Yearly ${inv_y})"
+    # Bilanz auch ins Logfile.
+    log "Snapshots geprüft: ${count} Datasets, ${created_total} neu (Hourly ${CREATED_HOURLY}, Daily ${CREATED_DAILY}, Weekly ${CREATED_WEEKLY}, Monthly ${CREATED_MONTHLY}, Yearly ${CREATED_YEARLY})"
 
     write_state last_snapshot_run "$(date '+%d.%m.%Y %H:%M:%S')"
     write_state datasets_count "$count"
@@ -5470,6 +5475,8 @@ run_local_replication() {
     local inv_y=0
     local inv_total=0
     local -a datasets
+    local b_full="$REPLICATION_FULL" b_inc="$REPLICATION_INCREMENTAL"
+    local b_res="$REPLICATION_RESUMED" b_skip="$REPLICATION_SKIPPED" b_err="$REPLICATION_ERRORS"
 
     [ "$ENABLE_LOCAL_REPLICATION" = "yes" ] || return
 
@@ -5502,6 +5509,8 @@ run_local_replication() {
         console_info "Datasets: ${REPLICATION_FULL} Full, ${REPLICATION_INCREMENTAL} inkrementell, ${REPLICATION_RESUMED} fortgesetzt, ${REPLICATION_SKIPPED} aktuell, ${REPLICATION_ERRORS} Fehler"
     fi
     console_info "Snapshot-Bestand Lokal: ${inv_total} verwaltete Snapshots (Hourly ${inv_h}, Daily ${inv_d}, Weekly ${inv_w}, Monthly ${inv_m}, Yearly ${inv_y})"
+    # Bilanz auch ins Logfile (sichtbar selbst wenn nichts zu tun war).
+    log "Lokale Replikation ${CURRENT_TARGET_LABEL}: $((REPLICATION_FULL-b_full)) Full, $((REPLICATION_INCREMENTAL-b_inc)) inkrementell, $((REPLICATION_RESUMED-b_res)) fortgesetzt, $((REPLICATION_SKIPPED-b_skip)) aktuell, $((REPLICATION_ERRORS-b_err)) Fehler"
 }
 
 run_target_replication() {
@@ -6188,6 +6197,8 @@ run_remote_replication() {
     local inv_y=0
     local inv_total=0
     local -a datasets
+    local b_full="$REMOTE_REPLICATION_FULL" b_inc="$REMOTE_REPLICATION_INCREMENTAL"
+    local b_res="$REMOTE_REPLICATION_RESUMED" b_skip="$REMOTE_REPLICATION_SKIPPED" b_err="$REMOTE_REPLICATION_ERRORS"
 
     [ "$ENABLE_REMOTE_REPLICATION" = "yes" ] || return
 
@@ -6236,6 +6247,8 @@ run_remote_replication() {
         console_info "Datasets: ${REMOTE_REPLICATION_FULL} Full, ${REMOTE_REPLICATION_INCREMENTAL} inkrementell, ${REMOTE_REPLICATION_RESUMED} fortgesetzt, ${REMOTE_REPLICATION_SKIPPED} aktuell, ${REMOTE_REPLICATION_ERRORS} Fehler"
     fi
     console_info "Snapshot-Bestand Remote: ${inv_total} verwaltete Snapshots (Hourly ${inv_h}, Daily ${inv_d}, Weekly ${inv_w}, Monthly ${inv_m}, Yearly ${inv_y})"
+    # Bilanz auch ins Logfile (sichtbar selbst wenn nichts zu tun war).
+    log "Remote-Replikation ${CURRENT_TARGET_LABEL}: $((REMOTE_REPLICATION_FULL-b_full)) Full, $((REMOTE_REPLICATION_INCREMENTAL-b_inc)) inkrementell, $((REMOTE_REPLICATION_RESUMED-b_res)) fortgesetzt, $((REMOTE_REPLICATION_SKIPPED-b_skip)) aktuell, $((REMOTE_REPLICATION_ERRORS-b_err)) Fehler"
 }
 
 # Run-Phase: verwaiste Ziel-Datasets nur ERKENNEN und LOGGEN, NIEMALS automatisch
@@ -7521,6 +7534,7 @@ verify_source_phase() {
     else
         console_error "Verify Quelle abgeschlossen: ${checked} geprüft, ${missing} fehlend, ${extra} extra, ${repairs} repariert, ${warnings} Warnung(en), ${errors} Fehler"
     fi
+    log "Verify Quelle: ${checked} geprüft, ${missing} fehlend, ${extra} extra, ${repairs} repariert, ${warnings} Warnung(en), ${errors} Fehler"
 
     return "$errors"
 }
@@ -7587,6 +7601,7 @@ verify_local_phase() {
     else
         console_error "Verify Lokal abgeschlossen: ${checked} geprüft, ${missing} fehlend, ${extra} extra, ${repairs} repariert, ${warnings} Warnung(en), ${errors} Fehler"
     fi
+    log "Verify Lokal: ${checked} geprüft, ${missing} fehlend, ${extra} extra, ${repairs} repariert, ${warnings} Warnung(en), ${errors} Fehler"
 
     return "$errors"
 }
@@ -7666,6 +7681,7 @@ verify_remote_phase() {
     else
         console_error "Verify Remote abgeschlossen: ${checked} geprüft, ${missing} fehlend, ${extra} extra, ${repairs} repariert, ${warnings} Warnung(en), ${errors} Fehler"
     fi
+    log "Verify Remote: ${checked} geprüft, ${missing} fehlend, ${extra} extra, ${repairs} repariert, ${warnings} Warnung(en), ${errors} Fehler"
 
     return "$errors"
 }
@@ -7772,6 +7788,7 @@ verify_borg_phase() {
     else
         console_error "Verify Borg abgeschlossen: ${checked} geprüft, ${missing} fehlend, ${extra} extra, ${warnings} Warnung(en), ${errors} Fehler"
     fi
+    log "Verify Borg: ${checked} geprüft, ${missing} fehlend, ${extra} extra, ${warnings} Warnung(en), ${errors} Fehler"
 
     return "$errors"
 }

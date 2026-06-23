@@ -13,7 +13,7 @@ _zfs_backup() {
         --datasets --snapshots --snapshot-tree --dataset-snapshots \
         --snapshot-ls --snapshot-cat --capacity --targets \
         --add-target --edit-target --delete-target --test-target \
-        --reorder-targets --move-target --borg-providers --borg-archives \
+        --reorder-targets --move-target --borg-providers --borg-archives --borg-check-update \
         --verify --verify-source --verify-local --verify-remote --verify-borg \
         --reset-statistics --reset-run-status --delete-logs \
         --thin-history --delete-managed-snapshots \

@@ -2114,6 +2114,12 @@ config_check() {
         fi
     fi
 
+    # Informativer borg-Versions-Check (gedrosselt; aktualisiert den Cache bewusst).
+    local borg_uhint
+    borg_update_refresh
+    borg_uhint=$(borg_update_cached_hint)
+    [ -n "$borg_uhint" ] && console_info "$borg_uhint"
+
     active_count=$(get_datasets | wc -l | tr -d ' ')
 
     echo
@@ -2390,6 +2396,8 @@ status_json() {
         "$(json_num "$local_active")" \
         "$(json_num "$remote_active")" \
         "$(json_num "$borg_active")"
+    # borg-Versions-Hinweis (nur aus dem Cache; kein Netz beim Seitenaufbau).
+    printf '"borg_update":"%s",' "$(json_escape "$(borg_update_cached_hint)")"
     # Gesicherte Datasets + verwalteter Snapshot-Bestand der Quelle (Stand letzter
     # Lauf, aus den run-stats – kein zfs/kein Wecken). Für die Dashboard-Übersicht.
     printf '"dataset_count":%s,' "$(json_num "$(read_run_stat DATASETS 0)")"
@@ -7087,6 +7095,81 @@ borg_repo_used_bytes() {
         | head -n1
 }
 
+# --- Informativer borg-Versions-Update-Check --------------------------------
+# Vergleicht die installierte borg-Version mit der neuesten GitHub-Release. KEIN
+# Auto-Update: die Binary ist gepinnt + SHA256-geprüft, ein borg-Update läuft
+# bewusst über ein Plugin-Release (neue BORG_VERSION in borg-setup.sh). Ein Sprung
+# auf eine neue Hauptversion (z. B. 2.x) ist breaking (Repo-Format) und wird extra
+# markiert. Ergebnis wird gecacht (1x/Tag) – kein Netzzugriff fürs bloße Anzeigen.
+
+borg_update_cache_file() { printf '%s/borg_update_check' "$STATE_DIR"; }
+
+# Installierte borg-Version (z. B. „1.4.4"). Leer, wenn nicht ermittelbar.
+borg_installed_version() {
+    local bin
+    bin=$(borg_bin) || return 1
+    "$bin" --version 2>/dev/null | awk '{print $2}'
+}
+
+# Neueste Release-Version von GitHub (tag_name). Leer bei Fehler/kein Netz.
+borg_github_latest_version() {
+    local url="https://api.github.com/repos/borgbackup/borg/releases/latest" body
+    if command -v curl >/dev/null 2>&1; then
+        body=$(curl -fsSL --max-time 8 "$url" 2>/dev/null)
+    elif command -v wget >/dev/null 2>&1; then
+        body=$(wget -qO- --timeout=8 "$url" 2>/dev/null)
+    else
+        return 1
+    fi
+    printf '%s' "$body" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1
+}
+
+# Version a < b (Punkt-getrennt, via sort -V). Rückgabe 0 wenn a<b.
+borg_version_lt() {
+    [ "$1" = "$2" ] && return 1
+    [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n1)" = "$1" ]
+}
+
+# GitHub höchstens 1x/Tag fragen und das Ergebnis cachen (CHECKED/INSTALLED/LATEST).
+# $1=force umgeht die Drosselung. Nur wenn ein borg-Ziel aktiv ist. Rückgabe immer 0.
+borg_update_refresh() {
+    local force="${1:-no}" cache cur latest now checked=0
+    [ "$(target_enabled_count borg)" -gt 0 ] || return 0
+    cur=$(borg_installed_version) || return 0
+    [ -n "$cur" ] || return 0
+    cache=$(borg_update_cache_file)
+    now=$(date +%s)
+    [ -f "$cache" ] && while IFS='=' read -r k v; do [ "$k" = "CHECKED" ] && checked=$v; done < "$cache"
+    if [ "$force" != "force" ] && [ "$((now - checked))" -lt 86400 ]; then
+        return 0
+    fi
+    latest=$(borg_github_latest_version) || return 0
+    [ -n "$latest" ] || return 0
+    mkdir -p "$STATE_DIR" 2>/dev/null
+    { printf 'CHECKED=%s\n' "$now"; printf 'INSTALLED=%s\n' "$cur"; printf 'LATEST=%s\n' "$latest"; } > "$cache"
+    return 0
+}
+
+# Hinweistext aus dem Cache (kein Netz). Leer, wenn aktuell/unbekannt. Major-Sprung
+# wird markiert (Repo-Format-Wechsel).
+borg_update_cached_hint() {
+    local cache cur latest cmaj lmaj
+    cache=$(borg_update_cache_file)
+    [ -f "$cache" ] || return 0
+    cur=""; latest=""
+    while IFS='=' read -r k v; do
+        case "$k" in INSTALLED) cur=$v ;; LATEST) latest=$v ;; esac
+    done < "$cache"
+    [ -n "$cur" ] && [ -n "$latest" ] || return 0
+    borg_version_lt "$cur" "$latest" || return 0
+    cmaj=${cur%%.*}; lmaj=${latest%%.*}
+    if [ "$cmaj" != "$lmaj" ]; then
+        printf 'borg %s verfügbar (installiert: %s) – ACHTUNG: neue Hauptversion mit Repo-Format-Wechsel, nicht ungeprüft übernehmen. Update über ein Plugin-Release.' "$latest" "$cur"
+    else
+        printf 'borg %s verfügbar (installiert: %s). Update über ein Plugin-Release einplanen.' "$latest" "$cur"
+    fi
+}
+
 # --- Persistenter Cache der Archivgrößen ------------------------------------
 # Die Größe eines borg-Archivs ändert sich nach der Erstellung nie -> einmal
 # ermittelt, dauerhaft gültig. Je Ziel eine Datei mit Zeilen
@@ -7899,6 +7982,11 @@ Verwendung:
       Archive der borg-Ziele anzeigen (borg list). Ohne ID alle borg-Ziele,
       sonst nur das angegebene. Ersetzt die manuelle BORG_*-Env-Eingabe.
 
+  zfs-backup.sh --borg-check-update
+      Informativ prüfen, ob eine neuere borg-Version verfügbar ist (GitHub).
+      Kein Auto-Update – borg wird über ein Plugin-Release aktualisiert. Der
+      normale Lauf aktualisiert den Hinweis ohnehin (gedrosselt, 1×/Tag).
+
   zfs-backup.sh --reorder-targets <id,id,...>
       Backup-Reihenfolge der Ziele neu festlegen. Erwartet ALLE vorhandenen
       Ziel-IDs genau einmal in der gewünschten Reihenfolge (erstes Ziel zuerst).
@@ -8268,6 +8356,23 @@ handle_cli() {
             # Archive eines/aller borg-Ziele anzeigen (optional auf eine ID beschränkt).
             cli_borg_archives "${CLI_ARGS[1]:-}"
             exit $?
+            ;;
+
+        --borg-check-update)
+
+            # borg-Versions-Check erzwingen (fragt GitHub) und das Ergebnis zeigen.
+            if [ "$(target_enabled_count borg)" -eq 0 ]; then
+                echo "Kein aktives borg-Ziel – Versions-Check übersprungen." >&2
+                exit 0
+            fi
+            borg_update_refresh force
+            uhint=$(borg_update_cached_hint)
+            if [ -n "$uhint" ]; then
+                console_warn "$uhint"
+            else
+                console_success "borg ist aktuell ($(borg_installed_version))."
+            fi
+            exit 0
             ;;
 
         --reorder-targets)
@@ -9146,7 +9251,7 @@ esac
 # wird blockiert, bis die Config geprüft wurde.
 if [ "$CONFIG_UPDATED" -eq 1 ]; then
     case "$1" in
-        --help|--version|--status|--gui-init|--check-stale|--capacity|--datasets|--snapshots|--targets|--dataset-snapshots|--snapshot-tree|--snapshot-ls|--snapshot-cat|--snapshot-restore|--log-tail|--log-follow|--progress-follow|--config-check|--config-schema|--borg-providers|--borg-archives|--get-config|--set-config|--add-target|--delete-target|--edit-target|--test-target|--reorder-targets|--move-target|--reset-statistics|--reset-run-status|--delete-logs|--thin-history|--delete-managed-snapshots|--cleanup-orphans)
+        --help|--version|--status|--gui-init|--check-stale|--capacity|--datasets|--snapshots|--targets|--dataset-snapshots|--snapshot-tree|--snapshot-ls|--snapshot-cat|--snapshot-restore|--log-tail|--log-follow|--progress-follow|--config-check|--config-schema|--borg-providers|--borg-archives|--borg-check-update|--get-config|--set-config|--add-target|--delete-target|--edit-target|--test-target|--reorder-targets|--move-target|--reset-statistics|--reset-run-status|--delete-logs|--thin-history|--delete-managed-snapshots|--cleanup-orphans)
             ;;
         *)
             echo
@@ -9188,6 +9293,10 @@ report_source_orphan_datasets
 log_phase "Pruning"
 run_pruning
 rotate_logs
+
+# borg-Versions-Check (gedrosselt 1x/Tag, nur bei aktivem borg-Ziel) – aktualisiert
+# den Cache, den Status/GUI/config-check ohne Netz lesen.
+borg_update_refresh
 
 show_run_summary
 

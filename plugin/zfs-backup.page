@@ -534,6 +534,10 @@ p.muted { color:#999; font-size:12px; }
   </div>
 <?php endif; ?>
 
+<?php if (!empty($st['borg_update'])): ?>
+  <div class="zb-warn">ℹ <?= zb_h($st['borg_update']) ?></div>
+<?php endif; ?>
+
   <div class="zb-cards">
 
     <div class="zb-card">

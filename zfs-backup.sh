@@ -4160,6 +4160,7 @@ remote_pool_capacity_json() {
 # erfasst und gecacht; die GUI liest nur den Cache und weckt keine Platte.
 capacity_json() {
     local first ds pool tid used cap_json q_ds seen=" "
+    local df_line df_total df_free
     local -a active
 
     printf '{'
@@ -4225,9 +4226,19 @@ capacity_json() {
         used=$(borg_repo_used_bytes) || continue
         [ -n "$used" ] || continue
         [ "$first" -eq 1 ] && first=0 || printf ','
-        printf '{"id":"%s","label":"%s","repo":"%s","used":%s}' \
+        # Dateisystem-Kapazität (total/frei) best effort per df über SSH; fehlt sie
+        # (lokales Repo, df nicht erlaubt), bleibt es bei „nur belegt".
+        df_total=""; df_free=""
+        if df_line=$(borg_repo_df_bytes); then
+            IFS=$'\t' read -r df_total df_free <<< "$df_line"
+        fi
+        printf '{"id":"%s","label":"%s","repo":"%s","used":%s' \
             "$(json_escape "$tid")" "$(json_escape "$(target_label "$tid")")" \
             "$(json_escape "$BORG_REPO")" "$(json_num "$used")"
+        if [ -n "$df_total" ] && [ -n "$df_free" ]; then
+            printf ',"total":%s,"free":%s' "$(json_num "$df_total")" "$(json_num "$df_free")"
+        fi
+        printf '}'
     done
     printf ']'
 
@@ -4237,7 +4248,7 @@ capacity_json() {
 # Kapazität menschenlesbar (Standardausgabe der CLI). Rechnet live; die GUI liest
 # den Cache über --capacity --json --cached (weckt keine Platte).
 show_capacity() {
-    local ds pool tid line size alloc free cap seen=" " bused
+    local ds pool tid line size alloc free cap seen=" " bused bdf btotal bfree
     local -a active
     echo "Kapazität (Pool-Auslastung)"
     echo
@@ -4266,13 +4277,21 @@ show_capacity() {
                 line=$(remote_ssh "zpool list -H -p -o size,alloc,free,capacity $(shell_quote "$(pool_of "$REMOTE_BASE_DATASET")") 2>/dev/null" 2>/dev/null) || continue
                 ;;
             borg)
-                # borg: deduplizierte Repo-Größe (belegt); kein frei/total.
+                # borg: deduplizierte Repo-Größe (belegt). Frei/gesamt best effort
+                # per df über SSH (z. B. Hetzner-Kontingent); sonst nur „belegt".
                 load_target_context "$tid" || continue
                 borg_ensure_binary >/dev/null 2>&1 || continue
                 bused=$(borg_repo_used_bytes)
                 [ -n "$bused" ] || continue
-                printf "  %-7s %-18s %s belegt (dedupliziert; Repo ohne festes Limit)\n" \
-                    "borg" "$(target_label "$tid")" "$(format_bytes "$bused")"
+                if bdf=$(borg_repo_df_bytes); then
+                    IFS=$'\t' read -r btotal bfree <<< "$bdf"
+                    printf "  %-7s %-18s %s belegt (dedupliziert) / %s frei  (von %s)\n" \
+                        "borg" "$(target_label "$tid")" "$(format_bytes "$bused")" \
+                        "$(format_bytes "$bfree")" "$(format_bytes "$btotal")"
+                else
+                    printf "  %-7s %-18s %s belegt (dedupliziert; Repo ohne festes Limit)\n" \
+                        "borg" "$(target_label "$tid")" "$(format_bytes "$bused")"
+                fi
                 continue
                 ;;
             *) continue ;;
@@ -7124,6 +7143,62 @@ borg_repo_used_bytes() {
         | tr ',{}' '\n\n\n' \
         | sed -n 's/.*"unique_csize"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' \
         | head -n1
+}
+
+# Gesamt-/freie Kapazität des Dateisystems, auf dem das Repo liegt – in Bytes,
+# als "<total><TAB><frei>". borg selbst kennt das nicht; wir holen es per `df -m`
+# über DIESELBE SSH-Verbindung wie borg (nur ssh://-Repos). Hetzner Storage Box
+# unterstützt genau das (Kontingent als „Dateisystem"); ein eigener SSH-Host
+# liefert die Auslastung seines Repo-Dateisystems. Wichtig: die Storage Box
+# erlaubt KEINE Pipes/Redirects in der Gegenstelle -> `df -m` pur aufrufen, lokal
+# parsen. Leer, wenn nicht ermittelbar (z. B. lokales Repo, df nicht erlaubt) ->
+# Anzeige fällt dann auf „nur belegt" zurück. Setzt geladenen borg-Kontext voraus.
+borg_repo_df_bytes() {
+    local rest authority userhost port path out mb_total mb_free
+
+    case "$BORG_REPO" in
+        ssh://*) ;;
+        *) return 1 ;;   # lokales Repo o. Ä. – kein df-über-SSH
+    esac
+
+    rest="${BORG_REPO#ssh://}"          # user@host:port/pfad
+    case "$rest" in */*) ;; *) return 1 ;; esac
+    authority="${rest%%/*}"             # user@host:port
+    path="/${rest#*/}"                  # /pfad (führendes / wieder ergänzen)
+    case "$authority" in
+        *:*) port="${authority##*:}"; userhost="${authority%:*}" ;;
+        *)   port=22; userhost="$authority" ;;
+    esac
+    case "$port" in ''|*[!0-9]*) port=22 ;; esac
+
+    # df -m: Spalten „Filesystem 1M-blocks Used Avail Capacity Mounted on".
+    # BORG_SSH_OPTIONS bewusst unquoted (mehrere -o-Optionen). stderr verwerfen
+    # (Storage-Box-Hinweise wie „post-quantum" landen dort).
+    # shellcheck disable=SC2086
+    out=$(ssh $BORG_SSH_OPTIONS -p "$port" "$userhost" df -m 2>/dev/null) || return 1
+    [ -n "$out" ] || return 1
+
+    # Datenzeilen mit >=6 Feldern und numerischem total/avail. Bei genau einer
+    # (Storage Box: ein Mount) diese nehmen; sonst den Mountpoint, der das längste
+    # Präfix des Repo-Pfads ist (eigener Server mit mehreren Dateisystemen).
+    read -r mb_total mb_free < <(printf '%s\n' "$out" | awk -v path="$path" '
+        NR==1 && $1=="Filesystem" { next }
+        (NF>=6 && $2 ~ /^[0-9]+$/ && $4 ~ /^[0-9]+$/) {
+            lines[++n]=$NF" "$2" "$4
+        }
+        END {
+            if (n==1) { split(lines[1],a," "); print a[2]" "a[3]; exit }
+            best=-1
+            for (i=1;i<=n;i++) {
+                split(lines[i],a," ")
+                if (index(path,a[1])==1 && length(a[1])>best) { best=length(a[1]); bt=a[2]; bf=a[3] }
+            }
+            if (best>=0) print bt" "bf
+        }')
+
+    case "$mb_total" in ''|*[!0-9]*) return 1 ;; esac
+    case "$mb_free"  in ''|*[!0-9]*) return 1 ;; esac
+    printf '%s\t%s\n' "$((mb_total*1048576))" "$((mb_free*1048576))"
 }
 
 # --- Informativer borg-Versions-Update-Check --------------------------------

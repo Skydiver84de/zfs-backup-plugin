@@ -594,9 +594,18 @@ p.muted { color:#999; font-size:12px; }
           $capRows[] = [(($t['label'] ?? '') ?: ($t['id'] ?? 'Lokal')), ($t['pool'] ?? [])];
       foreach (($cap['remote'] ?? []) as $t)
           $capRows[] = [(($t['label'] ?? '') ?: ($t['id'] ?? 'Remote')), ($t['pool'] ?? [])];
-      // borg: nur belegt (dedupliziert) – kein Frei/Gesamt/Auslastung. 3. Feld = borg-Marker.
-      foreach (($cap['borg'] ?? []) as $t)
-          $capRows[] = [(($t['label'] ?? '') ?: ($t['id'] ?? 'Borg')), ['alloc' => ($t['used'] ?? 0)], true];
+      // borg: belegt (dedupliziert). Frei/Gesamt/Auslastung nur, wenn per df über
+      // SSH ermittelt (z. B. Hetzner-Kontingent) – sonst „Repo ohne festes Limit".
+      // 3. Feld = borg-Marker.
+      foreach (($cap['borg'] ?? []) as $t) {
+          $brow = ['alloc' => ($t['used'] ?? 0)];
+          if (isset($t['total'], $t['free']) && (int)$t['total'] > 0) {
+              $brow['free'] = (int)$t['free'];
+              $brow['size'] = (int)$t['total'];
+              $brow['cap']  = (int)round(((int)$t['total'] - (int)$t['free']) / (int)$t['total'] * 100);
+          }
+          $capRows[] = [(($t['label'] ?? '') ?: ($t['id'] ?? 'Borg')), $brow, true];
+      }
   }
 ?>
 <?php if ($capRows): ?>
@@ -615,9 +624,15 @@ p.muted { color:#999; font-size:12px; }
         <td><?= zb_h($label) ?><?php if ($isBorg): ?> <span class="muted">(borg)</span><?php endif; ?></td>
         <td class="num"><?= zb_bytes($p['alloc'] ?? 0) ?></td>
         <?php if ($isBorg): ?>
-          <td class="num">–</td>
-          <td class="num">–</td>
-          <td><span class="muted">dedupliziert · Repo ohne festes Limit</span></td>
+          <?php if (isset($p['size']) && (int)$p['size'] > 0): ?>
+            <td class="num"><?= zb_bytes($p['free'] ?? 0) ?></td>
+            <td class="num"><?= zb_bytes($p['size'] ?? 0) ?></td>
+            <td><div class="zb-bar"><div class="zb-bar-fill <?= $lvl ?>" style="width:<?= $pct ?>%"></div><span class="zb-bar-lbl"><?= $pct ?> %</span></div></td>
+          <?php else: ?>
+            <td class="num">–</td>
+            <td class="num">–</td>
+            <td><span class="muted">dedupliziert · Repo ohne festes Limit</span></td>
+          <?php endif; ?>
         <?php else: ?>
           <td class="num"><?= zb_bytes($p['free'] ?? 0) ?></td>
           <td class="num"><?= zb_bytes($p['size'] ?? 0) ?></td>

@@ -19,9 +19,14 @@ Repo hält mehrere Datasets namespaced (Wiederverwendung des bestehenden Repos).
   Auflisten, `borg extract` für den Eintrag, `borg delete` zum Löschen fremder
   Archive). Der wichtigste Fall (ganzes Archiv zurückholen) geht bereits per CLI.
 * **Docs/CHANGELOG** beim Release.
-* **borg-Versions-Update-Check** (geplant, s. u. – Vorschlag offen).
 
 **Erledigt:**
+* **borg-Versions-Update-Check (informativ):** vergleicht die installierte
+  borg-Version mit der neuesten GitHub-Release (gecacht 1×/Tag), Hinweis in
+  `--config-check`/GUI/`--borg-check-update`. Kein Auto-Update (Binary gepinnt;
+  Major-Sprung = Repo-Format wird markiert).
+* **Fortschritt bei der borg-Übertragung:** `borg create --log-json --progress`
+  -> % gegen die referenzierte Snapshot-Größe in der Status-Box.
 * **Verify** für borg-Ziele: `--verify-borg` bzw. in `--verify`/`--verify-target`
   (rein meldend – fehlende/zusätzliche Archive).
 * **Restore (CLI)** aus borg-Archiven: `--snapshot-restore <quell-dataset>

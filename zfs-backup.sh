@@ -4347,6 +4347,10 @@ write_snapshots_list_cache() {
                 if [ "$force_remote" = "yes" ]; then
                     borg_ensure_binary >/dev/null 2>&1 || continue
                     borg_run info >/dev/null 2>&1 || continue
+                    # Live-„Aktualisieren": fehlende Größen nachziehen, bevor der
+                    # Cache gebaut wird (begrenzt; füllt sich über Klicks/Läufe).
+                    borg_load_existing_archives
+                    borg_backfill_sizes 50
                 else
                     { [ "$BORG_READY" -eq 1 ] && [ "$BORG_READY_REPO" = "$BORG_REPO" ]; } || continue
                 fi
@@ -4355,18 +4359,26 @@ write_snapshots_list_cache() {
                 # -> <ds>@<snap>; FREMDE Archive (anderes Schema, z. B. bestehende
                 # Backups im selben Repo) -> Pseudo-Dataset „(andere)". Eine Größe je
                 # Archiv liefert borg list nicht (nur borg info) -> used/refer = 0.
-                borg_run list --format '{archive}{TAB}{time:%s}{NL}' 2>/dev/null \
-                    | awk -F'\t' -v sep="__${SNAPSHOT_PREFIX}" '
+                # Größen aus dem persistenten Größen-Cache nachschlagen (used=dedup,
+                # referenced=original). FILENAME-Vergleich statt NR==FNR (robust auch
+                # bei leerem Größen-Cache). Größen-Cache nie leeren – nur anlegen.
+                local _szc
+                _szc=$(borg_size_cache_file "$tid")
+                [ -f "$_szc" ] || { : > "$_szc" 2>/dev/null || _szc=/dev/null; }
+                awk -F'\t' -v sep="__${SNAPSHOT_PREFIX}" -v szc="$_szc" '
+                        FILENAME==szc { if(NF>=3){ o[$1]=$2; d[$1]=$3 } next }
                         {
                             arch=$1; ts=$2
                             if (ts !~ /^[0-9]+$/) ts=0
+                            orig=(arch in o)?o[arch]:0; dedup=(arch in d)?d[arch]:0
                             i=index(arch,sep)
-                            if (i==0) { printf "(andere)@%s\t0\t0\t%d\n", arch, ts; next }
+                            if (i==0) { printf "(andere)@%s\t%d\t%d\t%d\n", arch, dedup, orig, ts; next }
                             dsm=substr(arch,1,i-1); snap=substr(arch,i+2)
                             gsub(/%/,"/",dsm)
-                            printf "%s@%s\t0\t0\t%d\n", dsm, snap, ts
+                            printf "%s@%s\t%d\t%d\t%d\n", dsm, snap, dedup, orig, ts
                         }
-                    ' > "$(snapshots_list_cache_file "$tid")"
+                    ' "$_szc" <(borg_run list --format '{archive}{TAB}{time:%s}{NL}' 2>/dev/null) \
+                    > "$(snapshots_list_cache_file "$tid")"
                 ;;
         esac
     done
@@ -6715,7 +6727,7 @@ borg_archive_exists() {
 # (mark_borg_replication_failed) und blockiert dadurch sein Quell-Pruning.
 replicate_dataset_borg() {
     local ds="$1"
-    local snap name archive root rc
+    local snap name archive root rc _bsz _bo _bd
     local did_fail=0
 
     while IFS= read -r snap; do
@@ -6745,6 +6757,11 @@ replicate_dataset_borg() {
             [ "$rc" -eq 1 ] && log "Borg create Warnung (rc=1, fortgesetzt): ${archive}"
             BORG_EXISTING_ARCHIVES="${BORG_EXISTING_ARCHIVES}${archive}|"
             ((BORG_CREATED_ARCHIVES++))
+            # Größe des frisch erstellten Archivs persistent cachen (ändert sich nie).
+            if _bsz=$(borg_fetch_archive_size "$archive"); then
+                IFS=$'\t' read -r _bo _bd <<< "$_bsz"
+                borg_size_store "$CURRENT_TARGET_ID" "$archive" "$_bo" "$_bd"
+            fi
         else
             log "FEHLER: Borg create fehlgeschlagen (rc=${rc}): ${archive}"
             write_state last_error "$(date '+%d.%m.%Y %H:%M:%S') Borg create fehlgeschlagen: ${archive}"
@@ -6901,6 +6918,9 @@ sync_borg_target_to_source_snapshots() {
         borg_prune_extra_archives "$ds"
     done
 
+    # Fehlende Archivgrößen nachziehen (begrenzt; füllt den Größen-Cache über Läufe).
+    borg_backfill_sizes 50
+
     # Speicher erst nach dem Löschen freigeben (sinnvollster Zeitpunkt).
     borg_compact_if_due
 
@@ -7017,6 +7037,62 @@ borg_repo_used_bytes() {
         | tr ',{}' '\n\n\n' \
         | sed -n 's/.*"unique_csize"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' \
         | head -n1
+}
+
+# --- Persistenter Cache der Archivgrößen ------------------------------------
+# Die Größe eines borg-Archivs ändert sich nach der Erstellung nie -> einmal
+# ermittelt, dauerhaft gültig. Je Ziel eine Datei mit Zeilen
+# <archive>\t<original_size>\t<deduplicated_size>. Genutzt für die Größenspalten
+# auf der Snapshots-Seite (statt 0).
+borg_size_cache_file() { printf '%s/borg_sizes_%s' "$STATE_DIR" "$1"; }
+
+# Gecachte Größe: gibt "<orig>\t<dedup>" aus (rc 0) oder rc 1 (nicht gecacht).
+borg_size_cached() {
+    local f
+    f=$(borg_size_cache_file "$1")
+    [ -f "$f" ] || return 1
+    awk -F'\t' -v a="$2" '$1==a { print $2 "\t" $3; f=1; exit } END { exit !f }' "$f"
+}
+
+# Größe persistent ablegen (nur, wenn noch nicht vorhanden – Archive sind unveränderlich).
+borg_size_store() {
+    local f
+    borg_size_cached "$1" "$2" >/dev/null 2>&1 && return 0
+    mkdir -p "$STATE_DIR" 2>/dev/null
+    f=$(borg_size_cache_file "$1")
+    printf '%s\t%s\t%s\n' "$2" "${3:-0}" "${4:-0}" >> "$f"
+}
+
+# Archivgröße per `borg info ::archive --json` holen -> "<orig>\t<dedup>" (rc 0) /
+# rc 1. Nur den archives-Abschnitt parsen (nicht die Repo-Gesamtstats). Setzt
+# geladenen borg-Kontext voraus.
+borg_fetch_archive_size() {
+    local js seg orig dedup
+    js=$(borg_run info "::$1" --json 2>/dev/null) || return 1
+    seg=${js#*\"archives\"}; seg=${seg%%\"cache\"*}
+    orig=$(printf '%s' "$seg"  | tr ',{}' '\n\n\n' | sed -n 's/.*"original_size"[^0-9]*\([0-9][0-9]*\).*/\1/p'      | head -n1)
+    dedup=$(printf '%s' "$seg" | tr ',{}' '\n\n\n' | sed -n 's/.*"deduplicated_size"[^0-9]*\([0-9][0-9]*\).*/\1/p' | head -n1)
+    [ -n "$orig" ] || return 1
+    printf '%s\t%s' "$orig" "${dedup:-0}"
+}
+
+# Fehlende Archivgrößen für die vorhandenen Archive (BORG_EXISTING_ARCHIVES)
+# nachziehen – für Archive, die vor diesem Feature erstellt wurden. Pro Lauf
+# begrenzt ($1, Default 50), damit eine langsame Leitung den Lauf nicht blockiert;
+# über mehrere Läufe füllt sich der Cache. Setzt geladenen borg-Kontext voraus.
+borg_backfill_sizes() {
+    local limit="${1:-50}" done_n=0 archive bsz bo bd
+    while IFS= read -r archive; do
+        [ -n "$archive" ] || continue
+        [ "$done_n" -ge "$limit" ] && break
+        borg_size_cached "$CURRENT_TARGET_ID" "$archive" >/dev/null 2>&1 && continue
+        if bsz=$(borg_fetch_archive_size "$archive"); then
+            IFS=$'\t' read -r bo bd <<< "$bsz"
+            borg_size_store "$CURRENT_TARGET_ID" "$archive" "$bo" "$bd"
+            done_n=$((done_n+1))
+        fi
+    done < <(printf '%s\n' "$BORG_EXISTING_ARCHIVES" | tr '|' '\n')
+    [ "$done_n" -gt 0 ] && log "Borg: ${done_n} Archivgröße(n) nachgezogen ($(target_label "$CURRENT_TARGET_ID"))"
 }
 
 # CLI: Archive eines/aller borg-Ziele anzeigen (--borg-archives [<ziel-id>]).

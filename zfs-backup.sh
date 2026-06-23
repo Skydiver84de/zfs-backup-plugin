@@ -84,6 +84,7 @@ BORG_REPLICATION_FAILED_DATASETS="|"
 BORG_REPLICATION_ERRORS=0
 BORG_DELETED_ARCHIVES=0
 BORG_CREATED_ARCHIVES=0
+BORG_SKIPPED_ARCHIVES=0
 BORG_EXISTING_ARCHIVES="|"
 # Repo dieses Laufs erreichbar? (analog REMOTE_READY) – erlaubt das Schreiben des
 # Snapshot-(Archiv-)Caches fürs GUI ohne erneuten Erreichbarkeits-Zwang.
@@ -3222,6 +3223,7 @@ run_pruning() {
     [ "$(target_enabled_count remote)" -gt 0 ] && summary="${summary}, Remote $((REMOTE_DELETED_SNAPSHOTS-before_remote)) entfernt"
     [ "$(target_enabled_count borg)" -gt 0 ] && summary="${summary}, Borg $((BORG_DELETED_ARCHIVES-before_borg)) entfernt"
     console_success "$summary"
+    log "$summary"
 }
 
 rotate_logs() {
@@ -6788,7 +6790,7 @@ replicate_dataset_borg() {
         name="${snap#*@}"
         [ -n "$name" ] || continue
         archive="$(borg_archive_name "$ds" "$name")"
-        borg_archive_exists "$archive" && continue
+        if borg_archive_exists "$archive"; then ((BORG_SKIPPED_ARCHIVES++)); continue; fi
 
         root="$(local_snapshot_root "$ds" "$name")" || {
             log "FEHLER: Borg-Quelle nicht browsebar (Mountpoint none/legacy): ${ds}@${name}"
@@ -6827,6 +6829,7 @@ replicate_dataset_borg() {
             # nur die Vorab-Liste war unvollständig. Übernehmen, nicht blockieren.
             log "Borg create: Archiv bereits vorhanden, übersprungen: ${archive}"
             BORG_EXISTING_ARCHIVES="${BORG_EXISTING_ARCHIVES}${archive}|"
+            ((BORG_SKIPPED_ARCHIVES++))
         else
             log "FEHLER: Borg create fehlgeschlagen (rc=${rc}): ${archive}"
             write_state last_error "$(date '+%d.%m.%Y %H:%M:%S') Borg create fehlgeschlagen: ${archive}"
@@ -6844,6 +6847,10 @@ replicate_dataset_borg() {
 run_borg_replication() {
     local ds index=0 total
     local -a datasets
+    local before_created before_skipped before_errors
+    before_created="$BORG_CREATED_ARCHIVES"
+    before_skipped="$BORG_SKIPPED_ARCHIVES"
+    before_errors="$BORG_REPLICATION_ERRORS"
 
     [ "$ENABLE_BORG_REPLICATION" = "yes" ] || return
 
@@ -6887,6 +6894,8 @@ run_borg_replication() {
         console_error "Borg-Replikation abgeschlossen"
     fi
     console_info "Archive: ${BORG_CREATED_ARCHIVES} neu erstellt"
+    # Bilanz auch ins Logfile (sichtbar selbst wenn nichts erstellt wurde).
+    log "Borg-Replikation ${CURRENT_TARGET_LABEL}: $((BORG_CREATED_ARCHIVES-before_created)) neu, $((BORG_SKIPPED_ARCHIVES-before_skipped)) bereits vorhanden, $((BORG_REPLICATION_ERRORS-before_errors)) Fehler"
 }
 
 # Borg-Zielabgleich: löscht je Dataset die Archive im eigenen Namespace
@@ -9220,6 +9229,15 @@ REMOTE_REPLICATION_SKIPPED=${REMOTE_REPLICATION_SKIPPED}
 REMOTE_REPLICATION_ERRORS=${REMOTE_REPLICATION_ERRORS}
 EOF
 
+    # Kompakte Bilanz ins Logfile (die ausführliche Statistik oben geht nur auf
+    # stdout). So endet das Log immer mit einer Zusammenfassung – auch wenn nichts
+    # zu tun war und sieht man nicht ratlos vor leeren Phasen-Abschnitten.
+    local borg_part=""
+    if [ "$(target_enabled_count borg)" -gt 0 ]; then
+        borg_part=", Borg ${BORG_CREATED_ARCHIVES} neu/${BORG_DELETED_ARCHIVES} entfernt"
+    fi
+    log "Zusammenfassung: ${result} – ${created_total} Snapshots neu, Pruning ${DELETED_SNAPSHOTS}/${LOCAL_DELETED_SNAPSHOTS}/${REMOTE_DELETED_SNAPSHOTS} (Quelle/lokal/remote)${borg_part}, Laufzeit ${runtime}s"
+
     # GUI-Cache (Datasets/Snapshots) für die Snapshots-Seite mitschreiben –
     # Platten sind jetzt ohnehin warm, das Anschauen weckt später keine mehr.
     write_gui_cache
@@ -9299,6 +9317,8 @@ run_target_replications
 log_phase "Verwaiste Datasets"
 report_all_target_orphan_datasets
 report_source_orphan_datasets
+[ "${ORPHAN_DATASETS_FOUND:-0}" -eq 0 ] && [ "${SOURCE_ORPHAN_DATASETS_FOUND:-0}" -eq 0 ] && \
+    log "Keine verwaisten Datasets/Snapshots."
 log_phase "Pruning"
 run_pruning
 rotate_logs

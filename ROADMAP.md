@@ -18,11 +18,8 @@ Repo hält mehrere Datasets namespaced (Wiederverwendung des bestehenden Repos).
   – dafür müsste er borg-Archive unterstützen (`borg list <archiv> <pfad>` zum
   Auflisten, `borg extract` für den Eintrag, `borg delete` zum Löschen fremder
   Archive). Der wichtigste Fall (ganzes Archiv zurückholen) geht bereits per CLI.
-* **Größe je borg-Archiv:** Die Erstellzeit wird angezeigt; eine Größe je Archiv
-  liefert `borg list` aber nicht (nur `borg info <archiv>`, ein SSH-Roundtrip pro
-  Archiv – bei vielen Archiven zu teuer). Optional später on-demand beim Aufklappen
-  eines Datasets nachladen.
 * **Docs/CHANGELOG** beim Release.
+* **borg-Versions-Update-Check** (geplant, s. u. – Vorschlag offen).
 
 **Erledigt:**
 * **Verify** für borg-Ziele: `--verify-borg` bzw. in `--verify`/`--verify-target`
@@ -44,6 +41,9 @@ Repo hält mehrere Datasets namespaced (Wiederverwendung des bestehenden Repos).
   „(andere)".
 * **Kapazität:** borg-Ziele zeigen die deduplizierte Repo-Größe (belegt) aus
   `borg info` in der Kapazitätstabelle (kein Frei/Limit – Repo ohne festes Limit).
+* **Archivgröße:** Größe je Archiv (original/dedupliziert) wird beim Erstellen per
+  `borg info ::archive` ermittelt und persistent gecacht (ändert sich nie); alte
+  Archive zieht der Abgleich begrenzt nach. Anzeige in den Spalten Größe/Belegt.
 * **Anbieter-Vorlagen (Provider-Presets):** Datenquelle `--borg-providers --json`
   (Start: Hetzner Storage Box + generischer SSH-Host). Die GUI-Auswahl füllt
   Repo-URL-Muster und `SSH_OPTIONS` vor und zeigt die Einrichtungsschritte

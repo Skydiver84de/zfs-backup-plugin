@@ -13,18 +13,15 @@ Repo hält mehrere Datasets namespaced (Wiederverwendung des bestehenden Repos).
 
 **Noch offen:**
 * **GUI-Datei-Browser + Restore für borg-Archive:** die Snapshots-Übersicht zeigt
-  borg-Archive bereits (s. u.), aber der Datei-Browser (`--snapshot-ls`) und damit
-  Einzeldatei-Restore über die GUI fehlen noch – dafür müsste er borg-Archive
-  unterstützen (`borg list <archiv> <pfad>` zum Auflisten, `borg extract` für den
-  Eintrag) und die Snapshots-Seite einen Restore-Knopf je Archiv bekommen. Der
-  wichtigste Fall (ganzes Archiv zurückholen) geht bereits per CLI.
-* **Datum/Größe der borg-Archive in der Anzeige:** Archive erscheinen in der
-  Snapshots-Seite derzeit ohne Erstellzeit und mit Größe 0 (borg-Archive tragen
-  keine ZFS-`creation`/`used`). Nachrüstbar aus borg-Metadaten, z. B.
-  `borg list --format '{archive}{TAB}{time}{TAB}{original_size}{NL}'` (bzw.
-  `--json`), und diese Werte in den Snapshot-Cache schreiben statt 0.
-* **Kapazitäts-Ansicht** für borg-Ziele in der GUI (optional; `borg info` liefert
-  die Repo-Größe).
+  borg-Archive bereits (inkl. fremder unter „(andere)"), aber der Datei-Browser
+  (`--snapshot-ls`) und damit Einzeldatei-Restore/-Löschen über die GUI fehlen noch
+  – dafür müsste er borg-Archive unterstützen (`borg list <archiv> <pfad>` zum
+  Auflisten, `borg extract` für den Eintrag, `borg delete` zum Löschen fremder
+  Archive). Der wichtigste Fall (ganzes Archiv zurückholen) geht bereits per CLI.
+* **Größe je borg-Archiv:** Die Erstellzeit wird angezeigt; eine Größe je Archiv
+  liefert `borg list` aber nicht (nur `borg info <archiv>`, ein SSH-Roundtrip pro
+  Archiv – bei vielen Archiven zu teuer). Optional später on-demand beim Aufklappen
+  eines Datasets nachladen.
 * **Docs/CHANGELOG** beim Release.
 
 **Erledigt:**
@@ -42,7 +39,11 @@ Repo hält mehrere Datasets namespaced (Wiederverwendung des bestehenden Repos).
   Testen, Tabellen-/Status-Anzeige.
 * **Snapshots-Seite:** borg-Ziele erscheinen wie remote als eigener Scope mit
   Datasets + Archiv-Zählungen; beim Aufklappen die einzelnen Archive (inkl.
-  zusätzlicher). Cache-basiert über `borg list` + Demangling `<ds%>__<snap>`.
+  zusätzlicher) mit Erstellzeit. Cache-basiert über `borg list` + Demangling
+  `<ds%>__<snap>`. Fremde Archive (nicht von uns) erscheinen als Pseudo-Dataset
+  „(andere)".
+* **Kapazität:** borg-Ziele zeigen die deduplizierte Repo-Größe (belegt) aus
+  `borg info` in der Kapazitätstabelle (kein Frei/Limit – Repo ohne festes Limit).
 * **Anbieter-Vorlagen (Provider-Presets):** Datenquelle `--borg-providers --json`
   (Start: Hetzner Storage Box + generischer SSH-Host). Die GUI-Auswahl füllt
   Repo-URL-Muster und `SSH_OPTIONS` vor und zeigt die Einrichtungsschritte

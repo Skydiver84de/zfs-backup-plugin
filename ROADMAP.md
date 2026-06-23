@@ -14,10 +14,12 @@ Repo hält mehrere Datasets namespaced (Wiederverwendung des bestehenden Repos).
 **Noch offen:**
 * **GUI-Datei-Browser + Restore für borg-Archive:** die Snapshots-Übersicht zeigt
   borg-Archive bereits (inkl. fremder unter „(andere)"), aber der Datei-Browser
-  (`--snapshot-ls`) und damit Einzeldatei-Restore/-Löschen über die GUI fehlen noch
+  (`--snapshot-ls`) und damit Einzeldatei-Restore über die GUI fehlen noch
   – dafür müsste er borg-Archive unterstützen (`borg list <archiv> <pfad>` zum
-  Auflisten, `borg extract` für den Eintrag, `borg delete` zum Löschen fremder
-  Archive). Der wichtigste Fall (ganzes Archiv zurückholen) geht bereits per CLI.
+  Auflisten, `borg extract` für den Eintrag). Der wichtigste Fall (ganzes Archiv
+  zurückholen) geht bereits per CLI. Kein Löschen fremder Archive über die GUI:
+  offiziell pflegen wir den Bestand ausschließlich über das Pruning; einzelne
+  fremde Archive werden im Bedarfsfall manuell per `borg delete` entfernt.
 * **Docs/CHANGELOG** beim Release.
 
 **Erledigt:**

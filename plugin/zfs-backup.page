@@ -590,6 +590,9 @@ p.muted { color:#999; font-size:12px; }
           $capRows[] = [(($t['label'] ?? '') ?: ($t['id'] ?? 'Lokal')), ($t['pool'] ?? [])];
       foreach (($cap['remote'] ?? []) as $t)
           $capRows[] = [(($t['label'] ?? '') ?: ($t['id'] ?? 'Remote')), ($t['pool'] ?? [])];
+      // borg: nur belegt (dedupliziert) – kein Frei/Gesamt/Auslastung. 3. Feld = borg-Marker.
+      foreach (($cap['borg'] ?? []) as $t)
+          $capRows[] = [(($t['label'] ?? '') ?: ($t['id'] ?? 'Borg')), ['alloc' => ($t['used'] ?? 0)], true];
   }
 ?>
 <?php if ($capRows): ?>
@@ -600,16 +603,22 @@ p.muted { color:#999; font-size:12px; }
       <th class="num">Gesamt</th><th>Auslastung</th>
     </tr></thead>
     <tbody>
-    <?php foreach ($capRows as $row): $label = $row[0]; $p = $row[1];
+    <?php foreach ($capRows as $row): $label = $row[0]; $p = $row[1]; $isBorg = !empty($row[2]);
         $pct = max(0, min(100, (int)($p['cap'] ?? 0)));
         $lvl = $pct >= 90 ? 'high' : ($pct >= 70 ? 'mid' : 'low');
     ?>
       <tr>
-        <td><?= zb_h($label) ?></td>
+        <td><?= zb_h($label) ?><?php if ($isBorg): ?> <span class="muted">(borg)</span><?php endif; ?></td>
         <td class="num"><?= zb_bytes($p['alloc'] ?? 0) ?></td>
-        <td class="num"><?= zb_bytes($p['free'] ?? 0) ?></td>
-        <td class="num"><?= zb_bytes($p['size'] ?? 0) ?></td>
-        <td><div class="zb-bar"><div class="zb-bar-fill <?= $lvl ?>" style="width:<?= $pct ?>%"></div><span class="zb-bar-lbl"><?= $pct ?> %</span></div></td>
+        <?php if ($isBorg): ?>
+          <td class="num">–</td>
+          <td class="num">–</td>
+          <td><span class="muted">dedupliziert · Repo ohne festes Limit</span></td>
+        <?php else: ?>
+          <td class="num"><?= zb_bytes($p['free'] ?? 0) ?></td>
+          <td class="num"><?= zb_bytes($p['size'] ?? 0) ?></td>
+          <td><div class="zb-bar"><div class="zb-bar-fill <?= $lvl ?>" style="width:<?= $pct ?>%"></div><span class="zb-bar-lbl"><?= $pct ?> %</span></div></td>
+        <?php endif; ?>
       </tr>
     <?php endforeach; ?>
     </tbody>

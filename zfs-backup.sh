@@ -4192,13 +4192,32 @@ capacity_json() {
     done
     printf ']'
 
+    # Borg-Ziele: deduplizierte Repo-Größe (belegt) – nur wenn das Repo in diesem
+    # Lauf erreichbar war (kein Extra-borg-info fürs bloße GUI-Anzeigen). Kein
+    # frei/total (Repo hat kein festes Limit).
+    printf ',"borg":['
+    first=1
+    for tid in "${TARGETS[@]}"; do
+        target_enabled "$tid" || continue
+        [ "$(target_type "$tid")" = "borg" ] || continue
+        load_target_context "$tid" || continue
+        { [ "$BORG_READY" -eq 1 ] && [ "$BORG_READY_REPO" = "$BORG_REPO" ]; } || continue
+        used=$(borg_repo_used_bytes) || continue
+        [ -n "$used" ] || continue
+        [ "$first" -eq 1 ] && first=0 || printf ','
+        printf '{"id":"%s","label":"%s","repo":"%s","used":%s}' \
+            "$(json_escape "$tid")" "$(json_escape "$(target_label "$tid")")" \
+            "$(json_escape "$BORG_REPO")" "$(json_num "$used")"
+    done
+    printf ']'
+
     printf '}\n'
 }
 
 # Kapazität menschenlesbar (Standardausgabe der CLI). Rechnet live; die GUI liest
 # den Cache über --capacity --json --cached (weckt keine Platte).
 show_capacity() {
-    local ds pool tid line size alloc free cap seen=" "
+    local ds pool tid line size alloc free cap seen=" " bused
     local -a active
     echo "Kapazität (Pool-Auslastung)"
     echo
@@ -4225,6 +4244,16 @@ show_capacity() {
             remote)
                 load_target_context "$tid" || continue
                 line=$(remote_ssh "zpool list -H -p -o size,alloc,free,capacity $(shell_quote "$(pool_of "$REMOTE_BASE_DATASET")") 2>/dev/null" 2>/dev/null) || continue
+                ;;
+            borg)
+                # borg: deduplizierte Repo-Größe (belegt); kein frei/total.
+                load_target_context "$tid" || continue
+                borg_ensure_binary >/dev/null 2>&1 || continue
+                bused=$(borg_repo_used_bytes)
+                [ -n "$bused" ] || continue
+                printf "  %-7s %-18s %s belegt (dedupliziert; Repo ohne festes Limit)\n" \
+                    "borg" "$(target_label "$tid")" "$(format_bytes "$bused")"
+                continue
                 ;;
             *) continue ;;
         esac
@@ -4321,15 +4350,21 @@ write_snapshots_list_cache() {
                 else
                     { [ "$BORG_READY" -eq 1 ] && [ "$BORG_READY_REPO" = "$BORG_REPO" ]; } || continue
                 fi
-                borg_run list --short 2>/dev/null \
-                    | awk -v sep="__${SNAPSHOT_PREFIX}" '
+                # {time:%s} = Erstellzeit als Unix-Epoch (Python-strftime via borg
+                # --format; numerisch geprüft, sonst 0). Eigene Archive <ds%>__<snap>
+                # -> <ds>@<snap>; FREMDE Archive (anderes Schema, z. B. bestehende
+                # Backups im selben Repo) -> Pseudo-Dataset „(andere)". Eine Größe je
+                # Archiv liefert borg list nicht (nur borg info) -> used/refer = 0.
+                borg_run list --format '{archive}{TAB}{time:%s}{NL}' 2>/dev/null \
+                    | awk -F'\t' -v sep="__${SNAPSHOT_PREFIX}" '
                         {
-                            i = index($0, sep)
-                            if (i == 0) next
-                            dsm  = substr($0, 1, i-1)
-                            snap = substr($0, i+2)
-                            gsub(/%/, "/", dsm)
-                            printf "%s@%s\t0\t0\t0\n", dsm, snap
+                            arch=$1; ts=$2
+                            if (ts !~ /^[0-9]+$/) ts=0
+                            i=index(arch,sep)
+                            if (i==0) { printf "(andere)@%s\t0\t0\t%d\n", arch, ts; next }
+                            dsm=substr(arch,1,i-1); snap=substr(arch,i+2)
+                            gsub(/%/,"/",dsm)
+                            printf "%s@%s\t0\t0\t%d\n", dsm, snap, ts
                         }
                     ' > "$(snapshots_list_cache_file "$tid")"
                 ;;
@@ -4403,6 +4438,20 @@ scope_json() {
             "$(json_num "$dm")" "$(json_num "$dy")" "$(json_num "$dt")" \
             "$(json_num "$du")"
     done < <(get_datasets)
+
+    # borg: fremde Archive (nicht von uns erstellt) als Pseudo-Dataset „(andere)"
+    # anhängen – damit sichtbar, später im Browser durchsuchbar/löschbar. Zählung
+    # separat (kein Typ-Split); Größe unbekannt.
+    if [ "$kind" = "borg" ]; then
+        local other_n
+        other_n=$(grep -c -F -- "(andere)@" "$cache" 2>/dev/null) || other_n=0
+        if [ "${other_n:-0}" -gt 0 ]; then
+            tt=$((tt+other_n))
+            [ "$first" -eq 1 ] && first=0 || printf ','
+            printf '{"dataset":"%s","source":"%s","hourly":0,"daily":0,"weekly":0,"monthly":0,"yearly":0,"total":%s,"used":0}' \
+                "$(json_escape "(andere)")" "$(json_escape "(andere)")" "$(json_num "$other_n")"
+        fi
+    fi
 
     printf '],"totals":{"hourly":%s,"daily":%s,"weekly":%s,"monthly":%s,"yearly":%s,"total":%s,"used":%s}}' \
         "$(json_num "$th")" "$(json_num "$td")" "$(json_num "$tw")" \
@@ -6957,6 +7006,17 @@ borg_providers_json() {
   }
 ]
 JSON
+}
+
+# Deduplizierte Gesamtgröße des Repos in Bytes (was es real belegt), aus
+# `borg info --json` (cache.stats.unique_csize). Reines tr/sed, kein jq. Setzt
+# geladenen borg-Kontext voraus. Leer bei Fehler. borg kennt kein „frei/total"
+# (Repo hat kein festes Limit) – daher nur die belegte Größe.
+borg_repo_used_bytes() {
+    borg_run info --json 2>/dev/null \
+        | tr ',{}' '\n\n\n' \
+        | sed -n 's/.*"unique_csize"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' \
+        | head -n1
 }
 
 # CLI: Archive eines/aller borg-Ziele anzeigen (--borg-archives [<ziel-id>]).

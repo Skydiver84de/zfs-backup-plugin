@@ -12,17 +12,18 @@ des Datasets. Passphrase liegt als Config-Feld (conf bleibt 600). Ein gemeinsame
 Repo hält mehrere Datasets namespaced (Wiederverwendung des bestehenden Repos).
 
 **Noch offen:**
-* **GUI-Datei-Browser + Restore für borg-Archive:** die Snapshots-Übersicht zeigt
-  borg-Archive bereits (inkl. fremder unter „(andere)"), aber der Datei-Browser
-  (`--snapshot-ls`) und damit Einzeldatei-Restore über die GUI fehlen noch
-  – dafür müsste er borg-Archive unterstützen (`borg list <archiv> <pfad>` zum
-  Auflisten, `borg extract` für den Eintrag). Der wichtigste Fall (ganzes Archiv
-  zurückholen) geht bereits per CLI. Kein Löschen fremder Archive über die GUI:
-  offiziell pflegen wir den Bestand ausschließlich über das Pruning; einzelne
-  fremde Archive werden im Bedarfsfall manuell per `borg delete` entfernt.
 * **Docs/CHANGELOG** beim Release.
 
 **Erledigt:**
+* **GUI-Datei-Browser + Einzeldatei-Restore für borg-Archive:** der Datei-Browser
+  (`--snapshot-ls`/`--snapshot-cat`) unterstützt jetzt borg-Ziele – Auflisten je
+  Verzeichnisebene über `borg list ::archiv <pfad>` (auf direkte Kinder gefiltert,
+  gleiches Roh-Format wie lokal/remote), Vorschau/Download per `borg extract
+  --stdout`, Einzeldatei-/Ordner-Restore in den `_restore`-Ordner des Quell-
+  Datasets. Fremde Archive unter „(andere)" sind browse-/herunterladbar, aber ohne
+  Restore (kein zugehöriges Quell-Dataset). Kein Löschen fremder Archive über die
+  GUI: der Bestand wird ausschließlich übers Pruning gepflegt; einzelne fremde
+  Archive bei Bedarf manuell per `borg delete`.
 * **borg-Versions-Update-Check (informativ):** vergleicht die installierte
   borg-Version mit der neuesten GitHub-Release (gecacht 1×/Tag), Hinweis in
   `--config-check`/GUI/`--borg-check-update`. Kein Auto-Update (Binary gepinnt;

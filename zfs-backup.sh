@@ -3717,6 +3717,28 @@ resolve_snapshot_browse() {
     local ds="$1" snap="$2" scope="${3:-source}" type
     BROWSE_MODE=""
     BROWSE_ROOT=""
+    BROWSE_BORG_ARCHIVE=""
+
+    # borg-Ziel: anderes Modell (kein Mountpoint, kein .zfs/snapshot). Browsen =
+    # `borg list ::archiv`. Archivname: verwaltetes Archiv = <ds%>__<snap>, ein
+    # FREMDES Archiv erscheint als Pseudo-Dataset „(andere)" -> der Archivname IST
+    # der „Snapshot". Vorgeschaltet, weil ds/snap dann keine ZFS-Namen sind.
+    if [ "$scope" != "source" ] && target_id_is_valid "$scope" \
+        && [ "$(target_type "$scope")" = "borg" ]; then
+        load_target_context "$scope" || return 1
+        if [ "$ds" = "(andere)" ]; then
+            BROWSE_BORG_ARCHIVE="$snap"
+        else
+            zfs_name_is_safe "$ds" || return 1
+            zfs_name_is_safe "$snap" || return 1
+            BROWSE_BORG_ARCHIVE="$(borg_archive_name "$ds" "$snap")"
+        fi
+        borg_archive_name_is_safe "$BROWSE_BORG_ARCHIVE" || return 1
+        borg_ensure_binary >/dev/null 2>&1 || return 1
+        BROWSE_MODE="borg"
+        return 0
+    fi
+
     zfs_name_is_safe "$ds" || return 1
     zfs_name_is_safe "$snap" || return 1
     case "$scope" in
@@ -3811,6 +3833,40 @@ remote_snapshot_ls_raw() {
     printf '%s' "$SNAPSHOT_LS_SCRIPT" | remote_snapshot_exec "$1" "$2" "$3"
 }
 
+# Borg-Listing: EINE Verzeichnisebene eines Archivs, im gleichen Roh-Format wie das
+# lokale/remote Script (typ<TAB>größe<TAB>mtime<TAB>name, NUL-getrennt), damit
+# snapshot_ls_json unverändert weiterparst. `borg list ::archiv <rel>` listet den
+# Teilbaum rekursiv; awk reduziert auf die DIREKTEN Kinder von rel. Archivname aus
+# BROWSE_BORG_ARCHIVE (von resolve_snapshot_browse gesetzt – deckt auch fremde
+# „(andere)"-Archive ab). $1 = rel (Unterpfad, leer = Archivwurzel).
+borg_snapshot_ls_raw() {
+    local rel="$1" archive="$BROWSE_BORG_ARCHIVE"
+    [ -n "$archive" ] || return 1
+    # {type} = ein Zeichen (d/-/l/…), {mtime:%s} = Epoch. NUL trennt Records.
+    {
+        if [ -n "$rel" ]; then
+            borg_run list --format '{type}{TAB}{size}{TAB}{mtime:%s}{TAB}{path}{NUL}' "::${archive}" "$rel" 2>/dev/null
+        else
+            borg_run list --format '{type}{TAB}{size}{TAB}{mtime:%s}{TAB}{path}{NUL}' "::${archive}" 2>/dev/null
+        fi
+    } | awk -v RS='\0' -v FS='\t' -v rel="$rel" '
+        {
+            type=$1; size=$2; mtime=$3; path=$4
+            sub(/^\.\//, "", path)               # führendes ./ entfernen
+            if (path=="" || path==".") next
+            if (rel != "") {
+                prefix = rel "/"
+                if (index(path, prefix) != 1) next
+                child = substr(path, length(prefix)+1)
+            } else {
+                child = path
+            }
+            if (child == "" || index(child, "/") > 0) next   # nur direkte Kinder
+            if (type == "-") type = "f"                      # borg: regulär = "-"
+            printf "%s\t%s\t%s\t%s%c", type, size, mtime, child, 0
+        }'
+}
+
 # Listing-Dispatcher (lokal oder remote) – eigene Funktion statt inline-case in
 # der Process Substitution (bash 3.2 stolpert sonst beim Parsen).
 # $1 mode, $2 root(lokal), $3 ds, $4 snap, $5 rel.
@@ -3818,6 +3874,7 @@ snapshot_ls_raw() {
     case "$1" in
         local)  local_snapshot_ls_raw  "$2" "$5" ;;
         remote) remote_snapshot_ls_raw "$3" "$4" "$5" ;;
+        borg)   borg_snapshot_ls_raw "$5" ;;   # Archiv aus BROWSE_BORG_ARCHIVE
     esac
 }
 
@@ -3860,9 +3917,11 @@ snapshot_cat() {
     resolve_snapshot_browse "$ds" "$snap" "$scope" || return 1
 
     # Gemeinsames Cat-Script: lokal via `sh -s`, remote via remote_snapshot_exec.
+    # borg: Datei direkt aus dem Archiv auf stdout (borg prüft den Pfad selbst).
     case "$BROWSE_MODE" in
         local)  printf '%s' "$SNAPSHOT_CAT_SCRIPT" | sh -s -- "${BROWSE_ROOT}/${rel}" "$BROWSE_ROOT" 2>/dev/null ;;
         remote) printf '%s' "$SNAPSHOT_CAT_SCRIPT" | remote_snapshot_exec "$ds" "$snap" "$rel" ;;
+        borg)   borg_run extract --stdout "::${BROWSE_BORG_ARCHIVE}" "$rel" 2>/dev/null ;;
     esac
 }
 
@@ -6751,6 +6810,19 @@ borg_archive_name() {
     printf '%s__%s' "${ds//\//%}" "$snap"
 }
 
+# Archivname plausibel/sicher? (für das Browsen fremder Archive, deren Name nicht
+# aus ZFS-Namen abgeleitet ist). Nicht leer, keine Zeilen-/Tab-Zeichen (würden die
+# zeilen-/NUL-basierte Verarbeitung stören). An borg geht der Name als eigenes
+# Argument (kein Shell-Kontext), daher reicht diese minimale Hürde.
+borg_archive_name_is_safe() {
+    local a="$1"
+    [ -n "$a" ] || return 1
+    case "$a" in
+        *[$'\n\t']*) return 1 ;;
+    esac
+    return 0
+}
+
 # Liest die Archivnamen des Repos einmal pro Lauf in BORG_EXISTING_ARCHIVES
 # (|name|name|-Set), damit die per-Dataset-Replikation nicht je Snapshot ein
 # eigenes `borg list` startet (Onefile-Re-Extraktion + SSH je Aufruf vermeiden).
@@ -8037,10 +8109,13 @@ Verwendung:
   zfs-backup.sh --snapshot-ls <dataset> <snapshot> <scope> [unterpfad]
       Verzeichnisinhalt eines Snapshots als JSON (Datei-Browser). <scope> =
       "source" oder eine Ziel-ID. Liest ins Dataset (.zfs/snapshot) und WECKT
-      ggf. die Platte/den Remote – bewusste Nutzeraktion.
+      ggf. die Platte/den Remote – bewusste Nutzeraktion. Bei einem borg-Ziel
+      wird das Archiv durchsucht (`borg list`); fremde Archive erscheinen unter
+      dem Pseudo-Dataset "(andere)" (dann ist <snapshot> der Archivname).
 
   zfs-backup.sh --snapshot-cat <dataset> <snapshot> <scope> <unterpfad>
       Inhalt EINER Datei aus einem Snapshot auf stdout (Download/Vorschau).
+      Bei borg-Zielen per `borg extract --stdout` aus dem Archiv.
 
   zfs-backup.sh --snapshot-restore <dataset> <snapshot> <scope> <unterpfad> [progress]
       Datei/Ordner aus einem Snapshot in den Restore-Ordner des QUELL-Datasets

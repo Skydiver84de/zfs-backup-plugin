@@ -1524,15 +1524,18 @@ p.muted { color:#999; font-size:12px; }
     if (warn) warn.style.display = 'none';
   }
 
-  // lastChange = wann sich zuletzt etwas geändert hat (Logzeile ODER Detail).
-  // Treibt den „läuft seit"-Ticker, der echten Stillstand sichtbar macht, ohne
-  // dass eine lange Einzeloperation wie ein Hänger wirkt.
-  var lastChange = Date.now();
+  // lastChange = wann sich zuletzt etwas geändert hat (Logzeile/Detail lokal ODER
+  // server-seitiges updated_epoch). Treibt den „läuft seit"-Ticker, der echten
+  // Stillstand sichtbar macht, ohne dass eine lange Einzeloperation wie ein Hänger
+  // wirkt. 0 = noch kein Referenzpunkt (Ticker bleibt leer, bis das erste
+  // Status-Event den echten Zeitpunkt liefert – wichtig beim Laden während eines
+  // schon laufenden Laufs, damit der Ticker nicht fälschlich bei 0 startet).
+  var lastChange = 0;
   function zbBump(){ lastChange = Date.now(); }
   function zbPad(n){ return (n < 10 ? '0' : '') + n; }
   function zbTick(){
     if (!elSince) return;
-    if (!statusActive) { elSince.textContent = ''; return; }
+    if (!statusActive || !lastChange) { elSince.textContent = ''; return; }
     var s = Math.floor((Date.now() - lastChange) / 1000);
     // Erst ab ein paar Sekunden Stillstand anzeigen – bei aktiver Bewegung leer.
     elSince.textContent = (s >= 4) ? ('· läuft seit ' + Math.floor(s/60) + ':' + zbPad(s%60)) : '';
@@ -1547,7 +1550,9 @@ p.muted { color:#999; font-size:12px; }
     statusActive = true;
     // Im Hintergrund-Tab keinen Worker halten – wird bei Sichtbarkeit reaktiviert.
     if (statusES || !window.EventSource || document.hidden) return;
-    lastChange = Date.now();    // Ticker frisch starten (auch nach Tab-Rückkehr)
+    // lastChange NICHT hier auf jetzt setzen – sonst startet „läuft seit" bei jeder
+    // Tab-Rückkehr/Reconnect neu. Es kommt aus dem server-seitigen updated_epoch
+    // (erstes status-Event), damit die echte (Still-)Dauer erhalten bleibt.
     var url = '/plugins/zfs-backup/include/log-stream.php?mode=status'
             + (expectStarting ? '&expect=starting' : '');
     statusES = new EventSource(url);
@@ -1561,6 +1566,10 @@ p.muted { color:#999; font-size:12px; }
       if (elPhase) elPhase.textContent = s.phase || '';
       if (elPid)   elPid.textContent   = s.pid ? ('(PID ' + s.pid + ')') : '';
       if (elMeta)  elMeta.textContent  = 'gestartet ' + (s.started || '') + ' · aktualisiert ' + (s.updated || '');
+      // „läuft seit" misst die Zeit seit der letzten ECHTEN Änderung – server-seitig
+      // (updated_epoch), damit Tab-Wechsel/Reconnect den Ticker nicht zurücksetzen.
+      // Math.max: nie rückwärts (lokale Logzeilen-Bumps bleiben gültig).
+      if (s.updated_epoch) lastChange = Math.max(lastChange, s.updated_epoch * 1000);
       var d = s.detail || '';
       if (elDetail && d !== elDetail.textContent) { elDetail.textContent = d; zbBump(); }
     });

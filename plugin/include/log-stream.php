@@ -77,10 +77,12 @@ function emit_status(array $st): void {
         'pid'     => $st['running_pid'] ?? null,
         'started' => $pg['started'] ?? null,
         'updated' => $pg['updated'] ?? null,
+        'updated_epoch' => isset($pg['updated_epoch']) ? (int)$pg['updated_epoch'] : null,
     ]));
 }
 
-/* Eine --progress-follow-Zeile (TAB-getrennt) als status-Event senden. */
+/* Eine --progress-follow-Zeile (TAB-getrennt) als status-Event senden.
+ * Felder: phase, detail, started, updated, updated_epoch, pid. */
 function emit_progress_line(string $line): void {
     $f = explode("\t", $line);
     sse('status', json_encode([
@@ -88,7 +90,8 @@ function emit_progress_line(string $line): void {
         'detail'  => $f[1] ?? null,
         'started' => $f[2] ?? null,
         'updated' => $f[3] ?? null,
-        'pid'     => (isset($f[4]) && $f[4] !== '') ? (int)$f[4] : null,
+        'updated_epoch' => (isset($f[4]) && $f[4] !== '') ? (int)$f[4] : null,
+        'pid'     => (isset($f[5]) && $f[5] !== '') ? (int)$f[5] : null,
     ]));
 }
 

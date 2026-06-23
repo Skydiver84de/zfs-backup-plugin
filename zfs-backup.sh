@@ -1682,11 +1682,17 @@ write_progress_detail() {
 }
 
 _write_progress_file() {
+    local now_e now_h
+    now_e=$(date +%s)
+    now_h=$(date '+%d.%m.%Y %H:%M:%S')
     {
         printf 'PHASE=%s\n'   "${PROGRESS_PHASE}"
         printf 'DETAIL=%s\n'  "${PROGRESS_DETAIL}"
         printf 'STARTED=%s\n' "${RUN_STARTED_HUMAN}"
-        printf 'UPDATED=%s\n' "$(date '+%d.%m.%Y %H:%M:%S')"
+        printf 'UPDATED=%s\n' "$now_h"
+        # Epoch der letzten echten Änderung – die GUI rechnet daraus „läuft seit"
+        # (server-seitig, daher stabil über Tab-Wechsel/Reconnect).
+        printf 'UPDATED_EPOCH=%s\n' "$now_e"
         printf 'PID=%s\n'     "$$"
     } > "${STATE_DIR}/run_progress"
 }
@@ -2349,11 +2355,12 @@ status_json() {
         printf '"running_pid":null,'
     fi
     if [ "$running" = "true" ] && [ -f "${STATE_DIR}/run_progress" ]; then
-        printf '"progress":{"phase":"%s","detail":"%s","started":"%s","updated":"%s"},' \
+        printf '"progress":{"phase":"%s","detail":"%s","started":"%s","updated":"%s","updated_epoch":%s},' \
             "$(json_escape "$(progress_value PHASE)")" \
             "$(json_escape "$(progress_value DETAIL)")" \
             "$(json_escape "$(progress_value STARTED)")" \
-            "$(json_escape "$(progress_value UPDATED)")"
+            "$(json_escape "$(progress_value UPDATED)")" \
+            "$(json_num "$(progress_value UPDATED_EPOCH)")"
     else
         printf '"progress":null,'
     fi
@@ -8068,21 +8075,22 @@ handle_cli() {
                     fi
                 done
                 while [ -f "$pf" ]; do
-                    phase=""; detail=""; started=""; updated=""; pid=""
+                    phase=""; detail=""; started=""; updated=""; updated_epoch=""; pid=""
                     while IFS='=' read -r k v; do
                         case "$k" in
                             PHASE)   phase=$v ;;
                             DETAIL)  detail=$v ;;
                             STARTED) started=$v ;;
                             UPDATED) updated=$v ;;
+                            UPDATED_EPOCH) updated_epoch=$v ;;
                             PID)     pid=$v ;;
                         esac
                     done < "$pf"
                     [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null && break
                     key="${phase}"$'\t'"${detail}"
                     if [ "$key" != "$last" ]; then
-                        printf '%s\t%s\t%s\t%s\t%s\n' \
-                            "$phase" "$detail" "$started" "$updated" "$pid"
+                        printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+                            "$phase" "$detail" "$started" "$updated" "$updated_epoch" "$pid"
                         last="$key"
                     fi
                     sleep 0.3

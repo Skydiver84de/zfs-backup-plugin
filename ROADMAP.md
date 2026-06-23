@@ -12,12 +12,19 @@ des Datasets. Passphrase liegt als Config-Feld (conf bleibt 600). Ein gemeinsame
 Repo hält mehrere Datasets namespaced (Wiederverwendung des bestehenden Repos).
 
 **Noch offen:**
-* **GUI-Datei-Browser + Restore für borg-Archive:** die Snapshots-Seite zeigt
-  bislang nur ZFS-Snapshots (aus dem State). Für Einzeldatei-Restore aus borg über
-  die GUI müsste der Datei-Browser (`--snapshot-ls`) borg-Archive unterstützen
-  (`borg list <archiv> <pfad>`) und die Seite die Archive anzeigen. Der wichtigste
-  Fall (ganzes Archiv zurückholen) geht bereits per CLI.
-* **Snapshots-/Kapazitäts-Ansicht** für borg-Ziele in der GUI (optional).
+* **GUI-Datei-Browser + Restore für borg-Archive:** die Snapshots-Übersicht zeigt
+  borg-Archive bereits (s. u.), aber der Datei-Browser (`--snapshot-ls`) und damit
+  Einzeldatei-Restore über die GUI fehlen noch – dafür müsste er borg-Archive
+  unterstützen (`borg list <archiv> <pfad>` zum Auflisten, `borg extract` für den
+  Eintrag) und die Snapshots-Seite einen Restore-Knopf je Archiv bekommen. Der
+  wichtigste Fall (ganzes Archiv zurückholen) geht bereits per CLI.
+* **Datum/Größe der borg-Archive in der Anzeige:** Archive erscheinen in der
+  Snapshots-Seite derzeit ohne Erstellzeit und mit Größe 0 (borg-Archive tragen
+  keine ZFS-`creation`/`used`). Nachrüstbar aus borg-Metadaten, z. B.
+  `borg list --format '{archive}{TAB}{time}{TAB}{original_size}{NL}'` (bzw.
+  `--json`), und diese Werte in den Snapshot-Cache schreiben statt 0.
+* **Kapazitäts-Ansicht** für borg-Ziele in der GUI (optional; `borg info` liefert
+  die Repo-Größe).
 * **Docs/CHANGELOG** beim Release.
 
 **Erledigt:**
@@ -33,6 +40,9 @@ Repo hält mehrere Datasets namespaced (Wiederverwendung des bestehenden Repos).
 * **GUI (PHP):** Zieltyp `borg` in der Ziele-Seite – Anlegen über „Ziel
   hinzufügen" (Typ borg), Bearbeiten (Repo, Passphrase, SSH-Optionen, Compact),
   Testen, Tabellen-/Status-Anzeige.
+* **Snapshots-Seite:** borg-Ziele erscheinen wie remote als eigener Scope mit
+  Datasets + Archiv-Zählungen; beim Aufklappen die einzelnen Archive (inkl.
+  zusätzlicher). Cache-basiert über `borg list` + Demangling `<ds%>__<snap>`.
 * **Anbieter-Vorlagen (Provider-Presets):** Datenquelle `--borg-providers --json`
   (Start: Hetzner Storage Box + generischer SSH-Host). Die GUI-Auswahl füllt
   Repo-URL-Muster und `SSH_OPTIONS` vor und zeigt die Einrichtungsschritte

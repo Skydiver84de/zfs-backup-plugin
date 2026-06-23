@@ -4080,7 +4080,7 @@ snapshot_restore() {
             fi
             local archive
             archive=$(borg_archive_name "$src_ds" "$snap")
-            if ! borg_run list --short 2>/dev/null | grep -qxF "$archive"; then
+            if ! borg_run list --format '{archive}{NL}' 2>/dev/null | grep -qxF "$archive"; then
                 echo "FEHLER: Borg-Archiv nicht vorhanden: $archive" >&2; return 1
             fi
             tmpd=$(mktemp -d "$(dirname "$RESTORE_DEST")/.zfsrestore.XXXXXX") \
@@ -6720,13 +6720,17 @@ borg_archive_name() {
 # Liest die Archivnamen des Repos einmal pro Lauf in BORG_EXISTING_ARCHIVES
 # (|name|name|-Set), damit die per-Dataset-Replikation nicht je Snapshot ein
 # eigenes `borg list` startet (Onefile-Re-Extraktion + SSH je Aufruf vermeiden).
+# WICHTIG: explizites `--format '{archive}{NL}'` statt `--short` – im Repo-Modus
+# liefert `--short` NICHT nur den Archivnamen (das gilt nur fürs Auflisten von
+# Archiv-INHALTEN); die Standardausgabe hängt einen Zeitstempel an, wodurch der
+# Set-Vergleich nie träfe und jedes Archiv fälschlich als „neu" gälte.
 borg_load_existing_archives() {
     local name
     BORG_EXISTING_ARCHIVES="|"
     while IFS= read -r name; do
         [ -n "$name" ] || continue
         BORG_EXISTING_ARCHIVES="${BORG_EXISTING_ARCHIVES}${name}|"
-    done < <(borg_run list --short 2>/dev/null)
+    done < <(borg_run list --format '{archive}{NL}' 2>/dev/null)
 }
 
 borg_archive_exists() {
@@ -6818,6 +6822,11 @@ replicate_dataset_borg() {
                 IFS=$'\t' read -r _bo _bd <<< "$_bsz"
                 borg_size_store "$CURRENT_TARGET_ID" "$archive" "$_bo" "$_bd"
             fi
+        elif borg_run list --format '{archive}{NL}' 2>/dev/null | grep -qxF "$archive"; then
+            # Archiv existiert bereits (z. B. „already exists", rc=2): kein Fehler,
+            # nur die Vorab-Liste war unvollständig. Übernehmen, nicht blockieren.
+            log "Borg create: Archiv bereits vorhanden, übersprungen: ${archive}"
+            BORG_EXISTING_ARCHIVES="${BORG_EXISTING_ARCHIVES}${archive}|"
         else
             log "FEHLER: Borg create fehlgeschlagen (rc=${rc}): ${archive}"
             write_state last_error "$(date '+%d.%m.%Y %H:%M:%S') Borg create fehlgeschlagen: ${archive}"

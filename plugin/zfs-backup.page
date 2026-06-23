@@ -1124,6 +1124,10 @@ p.muted { color:#999; font-size:12px; }
     var s = (d && d.snapshots) || [];
     if (!s.length) return '<p class="muted" style="margin:0">Keine verwalteten Snapshots.</p>';
     var ds = (d && d.dataset) || '', scope = (d && d.scope) || 'source';
+    // Borg-Archive lassen sich (noch) nicht im Datei-Browser durchsuchen –
+    // Wiederherstellen läuft über die CLI (--snapshot-restore). Statt des
+    // Durchsuchen-Knopfs ein Hinweis.
+    var scopeBorg = zbScopeIsBorg(scope);
     // Nach Typ gruppieren (Stündlich -> Täglich -> ... -> Jährlich), Unbekanntes
     // als "Sonstige" ans Ende. Die Eingangsliste ist bereits nach Datum absteigend
     // sortiert -> innerhalb jeder Gruppe bleibt neueste zuerst.
@@ -1144,12 +1148,15 @@ p.muted { color:#999; font-size:12px; }
       if (!g || !g.length) return;
       h += '<tr class="zb-snapgrp"><td colspan="6">' + zbEsc(LABEL[t]) + ' (' + g.length + ')</td></tr>';
       g.forEach(function(x){
+        var act = scopeBorg
+          ? '<span class="muted" title="Borg-Archiv – Wiederherstellen per CLI: zfs-backup --snapshot-restore">Archiv</span>'
+          : '<button type="button" class="zb-fb-open" data-ds="' + zbEsc(ds)
+            + '" data-scope="' + zbEsc(scope) + '" data-snap="' + zbEsc(x.snapshot)
+            + '" title="Inhalt dieses Snapshots durchsuchen (greift auf die Platte zu)">Durchsuchen</button>';
         h += '<tr><td class="mono">' + zbEsc(x.snapshot) + '</td><td>' + zbEsc(x.type)
            + '</td><td class="num">' + zbBytes(x.size) + '</td><td class="num">' + zbBytes(x.used)
            + '</td><td>' + zbEsc(x.created) + '</td>'
-           + '<td class="num"><button type="button" class="zb-fb-open" data-ds="' + zbEsc(ds)
-           + '" data-scope="' + zbEsc(scope) + '" data-snap="' + zbEsc(x.snapshot)
-           + '" title="Inhalt dieses Snapshots durchsuchen (greift auf die Platte zu)">Durchsuchen</button></td></tr>';
+           + '<td class="num">' + act + '</td></tr>';
       });
     });
     return h + '</tbody></table>';
@@ -1961,7 +1968,8 @@ p.muted { color:#999; font-size:12px; }
   var maintPanel = document.querySelector('[data-panel="wartung"]');
 
   // Auswahl-Popup für die Ziel-Wahl (Verwaiste-Datasets-Aktionen).
-  var ZB_TARGETS = <?= json_encode(array_map(function($t){ return ['id' => (string)($t['id'] ?? ''), 'label' => (string)($t['label'] ?? ($t['id'] ?? '')) ]; }, is_array($targets) ? $targets : [])) ?>;
+  var ZB_TARGETS = <?= json_encode(array_map(function($t){ return ['id' => (string)($t['id'] ?? ''), 'label' => (string)($t['label'] ?? ($t['id'] ?? '')), 'type' => (string)($t['type'] ?? '') ]; }, is_array($targets) ? $targets : [])) ?>;
+  function zbScopeIsBorg(scope){ return ZB_TARGETS.some(function(t){ return t.id === scope && t.type === 'borg'; }); }
   var pickBox   = document.getElementById('zb-pick');
   var pickBody  = document.getElementById('zb-pick-body');
   var pickTitle = document.getElementById('zb-pick-title');

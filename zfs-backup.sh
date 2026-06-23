@@ -85,6 +85,10 @@ BORG_REPLICATION_ERRORS=0
 BORG_DELETED_ARCHIVES=0
 BORG_CREATED_ARCHIVES=0
 BORG_EXISTING_ARCHIVES="|"
+# Repo dieses Laufs erreichbar? (analog REMOTE_READY) – erlaubt das Schreiben des
+# Snapshot-(Archiv-)Caches fürs GUI ohne erneuten Erreichbarkeits-Zwang.
+BORG_READY=0
+BORG_READY_REPO=""
 CURRENT_TARGET_ID=""
 CURRENT_TARGET_LABEL=""
 VERIFY_WARNINGS=0
@@ -429,7 +433,9 @@ format_bytes() {
 # GNU date (Unraid) via -d @epoch; BSD-Fallback (-r) der Robustheit halber.
 format_epoch() {
     local e="$1"
-    case "$e" in ''|*[!0-9]*) return ;; esac
+    # 0/leer/ungültig -> leer (borg-Archive tragen keine ZFS-creation; sie geben 0
+    # an, was sonst als „01.01.1970" erschiene).
+    case "$e" in ''|0|*[!0-9]*) return ;; esac
     date -d "@${e}" '+%d.%m.%Y %H:%M:%S' 2>/dev/null \
         || date -r "$e" '+%d.%m.%Y %H:%M:%S' 2>/dev/null
 }
@@ -4302,6 +4308,31 @@ write_snapshots_list_cache() {
                     | filter_managed_snapshot_lines remote_target_dataset \
                     > "$(snapshots_list_cache_file "$tid")"
                 ;;
+            borg)
+                # borg-Archive als „Snapshots" cachen – nur bei Live-Refresh (force)
+                # oder wenn das Repo in diesem Lauf schon erreichbar war (BORG_READY);
+                # sonst bleibt der alte Cache (kein Netzzugriff fürs Anzeigen, analog
+                # remote). <ds%>__<snap> wird zu <ds>@<snap> demangled (% -> /);
+                # Trenner ist „__<SNAPSHOT_PREFIX>" (eindeutig). used/refer/creation
+                # sind bei borg unbekannt -> 0.
+                if [ "$force_remote" = "yes" ]; then
+                    borg_ensure_binary >/dev/null 2>&1 || continue
+                    borg_run info >/dev/null 2>&1 || continue
+                else
+                    { [ "$BORG_READY" -eq 1 ] && [ "$BORG_READY_REPO" = "$BORG_REPO" ]; } || continue
+                fi
+                borg_run list --short 2>/dev/null \
+                    | awk -v sep="__${SNAPSHOT_PREFIX}" '
+                        {
+                            i = index($0, sep)
+                            if (i == 0) next
+                            dsm  = substr($0, 1, i-1)
+                            snap = substr($0, i+2)
+                            gsub(/%/, "/", dsm)
+                            printf "%s@%s\t0\t0\t0\n", dsm, snap
+                        }
+                    ' > "$(snapshots_list_cache_file "$tid")"
+                ;;
         esac
     done
 }
@@ -4393,6 +4424,7 @@ snapshot_tree_json() {
         case "$type" in
             local)  mapper=local_target_dataset ;;
             remote) mapper=remote_target_dataset ;;
+            borg)   mapper="cat" ;;   # Archive sind nach Quell-Dataset benannt (1:1)
             *)      continue ;;
         esac
         # Kontext setzen (LOCAL_BACKUP_POOL/REMOTE_BASE_DATASET) – der Mapper
@@ -6701,6 +6733,10 @@ run_borg_replication() {
         BORG_REPLICATION_FAILED_DATASETS="|*|"
         return
     fi
+
+    # Repo erreichbar -> der GUI-Cache darf danach die Archivliste abrufen.
+    BORG_READY=1
+    BORG_READY_REPO="$BORG_REPO"
 
     borg_load_existing_archives
 

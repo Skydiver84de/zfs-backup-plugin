@@ -97,7 +97,7 @@ $scopes   = $tree['scopes'] ?? [];
   // Scope-Akkordeon: Quelle + jedes aktive Ziel. Köpfe + Dataset-Tabellen werden
   // serverseitig aus dem Cache gerendert (billig); die Einzel-Snapshots eines
   // Datasets lädt JS erst beim Klick nach (dataset-snapshots.php).
-  $kindLabel = ['source' => 'Quelle', 'local' => 'Lokales Ziel', 'remote' => 'Remote-Ziel'];
+  $kindLabel = ['source' => 'Quelle', 'local' => 'Lokales Ziel', 'remote' => 'Remote-Ziel', 'borg' => 'Borg-Ziel'];
 ?>
 <h3 class="zb-sub">Snapshots je Quelle &amp; Ziel</h3>
 <div id="zb-scopes">

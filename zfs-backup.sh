@@ -6881,13 +6881,47 @@ borg_create_progress() {
     done
 }
 
+# Stabiler, pro Dataset gleichbleibender Quellpfad fürs borg-Lesen. Hintergrund:
+# borgs files-cache (überspringt das Re-Chunking unveränderter Dateien) nutzt
+# ABSOLUTE Pfade. Läse man direkt aus <mp>/.zfs/snapshot/<snap> (Pfad ändert sich
+# je Snapshot), würde borg jede Datei in JEDEM Archiv neu lesen/chunken – die
+# Deduplizierung spart dann nur den Upload, nicht das Lesen (laut borg-FAQ genau
+# der „Snapshot mit instabilem Namen"-Fall). Ein Bind-Mount auf einen stabilen
+# Pfad lässt den Cache über Snapshots UND Läufe greifen. Echo = stabiler Pfad bei
+# Erfolg; Rückgabe 1 -> Aufrufer liest direkt (korrekt, nur ohne Cache-Vorteil).
+borg_src_mount() {
+    local ds="$1" root="$2" mnt
+    mnt="${RUNTIME_DIR}/borg/_src/${ds//\//%}"
+    mkdir -p "$mnt" 2>/dev/null || return 1
+    mountpoint -q "$mnt" 2>/dev/null && umount "$mnt" 2>/dev/null   # Rest eines Abbruchs
+    mount --bind "$root" "$mnt" 2>/dev/null || return 1
+    printf '%s' "$mnt"
+}
+
+borg_src_umount() {
+    local mnt="$1"
+    [ -n "$mnt" ] || return 0
+    umount "$mnt" 2>/dev/null
+}
+
+# Verwaiste Bind-Mounts unter _src lösen (z. B. nach hartem Abbruch eines Laufs) –
+# damit sie keine Snapshots am Löschen hindern. Vor dem Lauf aufgerufen.
+borg_src_cleanup_all() {
+    local base="${RUNTIME_DIR}/borg/_src" d
+    [ -d "$base" ] || return 0
+    for d in "$base"/*; do
+        [ -d "$d" ] || continue
+        mountpoint -q "$d" 2>/dev/null && umount "$d" 2>/dev/null
+    done
+}
+
 # Legt für jeden verwalteten Quell-Snapshot ohne Archiv ein borg-Archiv an. Liest
 # read-only aus <mountpoint>/.zfs/snapshot/<snap> – exakt der Pfad, den auch
 # Datei-Browser und Restore nutzen. Ein Fehler markiert das Dataset
 # (mark_borg_replication_failed) und blockiert dadurch sein Quell-Pruning.
 replicate_dataset_borg() {
     local ds="$1"
-    local snap name archive root rc _bsz _bo _bd _btotal
+    local snap name archive root rc _bsz _bo _bd _btotal src mnt
     local did_fail=0
 
     while IFS= read -r snap; do
@@ -6915,10 +6949,15 @@ replicate_dataset_borg() {
         # Fortschritt strukturiert auf stderr melden -> borg_create_progress.
         _btotal=$(zfs get -Hp -o value referenced "${ds}@${name}" 2>/dev/null)
         case "$_btotal" in ''|*[!0-9]*) _btotal=0 ;; esac
-        # cd in den Snapshot-Root, „." sichern -> Archiv enthält relative Pfade.
-        ( cd "$root" && borg_run create --one-file-system --log-json --progress "::${archive}" . \
+        # Stabilen Quellpfad per Bind-Mount (files-cache-Vorteil); scheitert das,
+        # direkt aus dem Snapshot lesen (korrekt, nur langsamer).
+        src="$root"; mnt=""
+        if mnt=$(borg_src_mount "$ds" "$root"); then src="$mnt"; else mnt=""; fi
+        # cd in den (stabilen) Snapshot-Root, „." sichern -> Archiv enthält relative Pfade.
+        ( cd "$src" && borg_run create --one-file-system --log-json --progress "::${archive}" . \
             2> >(borg_create_progress "$_btotal" "$archive") )
         rc=$?
+        borg_src_umount "$mnt"
         if [ "$rc" -eq 0 ] || [ "$rc" -eq 1 ]; then
             [ "$rc" -eq 1 ] && log "Borg create Warnung (rc=1, fortgesetzt): ${archive}"
             BORG_EXISTING_ARCHIVES="${BORG_EXISTING_ARCHIVES}${archive}|"
@@ -6980,6 +7019,7 @@ run_borg_replication() {
     BORG_READY=1
     BORG_READY_REPO="$BORG_REPO"
 
+    borg_src_cleanup_all   # evtl. verwaiste Bind-Mounts eines Abbruchs lösen
     borg_load_existing_archives
 
     mapfile -t datasets < <(get_datasets)

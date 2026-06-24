@@ -8828,7 +8828,10 @@ handle_cli() {
             # Datasets). Optionaler Scope: "source" (Default) oder eine Ziel-ID.
             local dss_ds="${CLI_ARGS[1]:-}"
             local dss_scope="${CLI_ARGS[2]:-source}"
-            if [ -z "$dss_ds" ] || ! zfs_name_is_safe "$dss_ds"; then
+            # „(andere)" ist das Pseudo-Dataset fremder borg-Archive (kein ZFS-Name)
+            # -> bewusst von der zfs_name_is_safe-Prüfung ausgenommen. managed_dataset_
+            # snapshots filtert ohnehin nur per „<ds>@"-Präfix aus dem Cache.
+            if [ -z "$dss_ds" ] || { [ "$dss_ds" != "(andere)" ] && ! zfs_name_is_safe "$dss_ds"; }; then
                 if [ "$CLI_FORMAT" = "json" ]; then
                     echo '{"error":"ungültiges Dataset","snapshots":[]}'
                 else

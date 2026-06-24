@@ -1133,7 +1133,24 @@ p.muted { color:#999; font-size:12px; }
       .catch(function(e){ snapBody.innerHTML = '<div class="zb-error">Fehler beim Laden: ' + e + '</div>'; });
   }
   var snapReload = document.getElementById('zb-snap-reload');
-  if (snapReload) snapReload.addEventListener('click', function(){ zbLoadSnapshots(true, true); });
+  if (snapReload) snapReload.addEventListener('click', function(){
+    // Live-Refresh mit sichtbarem Fortschritt – gleiches Streaming-Modal wie
+    // Wartung/Verify (zbStream). Der Kern fragt Quelle + Ziele EINMAL live ab und
+    // schreibt die Caches; danach rendern wir aus dem frischen Cache (kein
+    // erneutes Abfragen). Das Modal bleibt offen, bis der Nutzer es schließt.
+    snapReload.disabled = true;
+    zbStream('/plugins/zfs-backup/include/maintenance.php',
+             'csrf_token=' + encodeURIComponent(zbCsrf()) + '&action=refresh-snapshots',
+             'Live-Aktualisierung', 'Frage Quelle und Ziele ab … (Remote wird ggf. geweckt)')
+      .then(function(text){
+        var ok = /\[Exit-Code: 0\]/.test(text);
+        zbModalStatus(ok);
+        snapLoaded = false;
+        zbLoadSnapshots(true, false);   // frisch gerendert aus dem aktualisierten Cache
+      })
+      .catch(function(e){ zbModalBody('Fehler: ' + e); zbModalStatus(false); })
+      .then(function(){ snapReload.disabled = false; });
+  });
 
   // ---- Aufklappbare Dataset-Zeilen: Snapshots mit vollem Namen + Größe -------
   // (Grundlage fürs spätere gezielte Wiederherstellen.) Klick auf eine

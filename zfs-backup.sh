@@ -4452,6 +4452,7 @@ write_snapshots_list_cache() {
     local tid type
 
     # Quelle: ein zfs list über alle Pools.
+    [ "$force_remote" = "yes" ] && console_status "Quelle wird live abgefragt …"
     zfs list -H -p -o name,used,referenced,creation -t snapshot 2>/dev/null \
         | filter_managed_snapshot_lines cat > "${STATE_DIR}/snapshots_list_cache"
 
@@ -4462,6 +4463,13 @@ write_snapshots_list_cache() {
         target_enabled "$tid" || continue
         load_target_context "$tid" || continue
         type=$(target_type "$tid")
+        if [ "$force_remote" = "yes" ]; then
+            case "$type" in
+                remote) console_status "Ziel »$(target_label "$tid")« (Remote) – wird abgefragt (weckt ggf. den Host) …" ;;
+                borg)   console_status "Ziel »$(target_label "$tid")« (Borg) – Archive werden über SSH gelesen …" ;;
+                *)      console_status "Ziel »$(target_label "$tid")« (${type}) wird abgefragt …" ;;
+            esac
+        fi
         case "$type" in
             local)
                 zfs_name_is_safe "$LOCAL_BACKUP_POOL" || continue
@@ -8202,6 +8210,12 @@ Verwendung:
       Größen (Grundlage der aufklappbaren Snapshots-Seite). Mit --cached den am
       letzten Lauf erfassten Stand aus dem State (weckt keine Platte).
 
+  zfs-backup.sh --refresh-snapshots
+      Snapshots-Seite live aktualisieren: fragt Quelle + alle aktiven Ziele EINMAL
+      direkt ab (darf Remote wecken / borg über SSH) und schreibt die GUI-Caches
+      neu. Ausgabe mit Fortschritt je Scope (für die GUI gestreamt). Danach rendert
+      die GUI aus dem frischen Cache (kein erneutes Abfragen).
+
   zfs-backup.sh --snapshot-ls <dataset> <snapshot> <scope> [unterpfad]
       Verzeichnisinhalt eines Snapshots als JSON (Datei-Browser). <scope> =
       "source" oder eine Ziel-ID. Liest ins Dataset (.zfs/snapshot) und WECKT
@@ -8856,6 +8870,25 @@ handle_cli() {
             else
                 snapshot_tree_json
             fi
+            exit 0
+            ;;
+
+        --refresh-snapshots)
+
+            # Live-Aktualisierung der Snapshots-Seite mit SICHTBAREM Fortschritt
+            # (GUI streamt das wie Wartung/Verify ins Modal). Fragt Quelle + alle
+            # aktiven Ziele EINMAL live ab (darf Remote wecken / borg über SSH) und
+            # schreibt anschließend die GUI-Caches – die Folgeansicht rendert dann
+            # aus dem frischen Cache (kein doppeltes Live-Abfragen mehr). Ausgabe
+            # ist Text mit „[Exit-Code: N]" am Ende (Streaming-Konvention).
+            write_snapshots_list_cache yes
+            console_status "Schreibe Übersicht und Kapazität …"
+            datasets_json      > "${STATE_DIR}/datasets_cache.json"      2>/dev/null
+            snapshots_json     > "${STATE_DIR}/snapshots_cache.json"     2>/dev/null
+            capacity_json      > "${STATE_DIR}/capacity_cache.json"      2>/dev/null
+            snapshot_tree_json > "${STATE_DIR}/snapshot_tree_cache.json" 2>/dev/null
+            echo "Aktualisierung abgeschlossen."
+            echo "[Exit-Code: 0]"
             exit 0
             ;;
 
@@ -9536,7 +9569,7 @@ fi
 # Befehlen, die das brauchen (Lauf/Pflege/Schreiben). Reine Lese-Befehle, die die
 # GUI beim Seitenaufbau mehrfach aufruft, überspringen das (Performance).
 case "$1" in
-    --version|--help|--status|--gui-init|--capacity|--datasets|--snapshots|--snapshot-tree|--dataset-snapshots|--snapshot-ls|--snapshot-cat|--targets|--config-schema|--borg-providers|--get-config|--log-tail|--log-follow|--progress-follow|--check-stale|--stop)
+    --version|--help|--status|--gui-init|--capacity|--datasets|--snapshots|--snapshot-tree|--refresh-snapshots|--dataset-snapshots|--snapshot-ls|--snapshot-cat|--targets|--config-schema|--borg-providers|--get-config|--log-tail|--log-follow|--progress-follow|--check-stale|--stop)
         ;;
     *)
         config_maintain
@@ -9547,7 +9580,7 @@ esac
 # wird blockiert, bis die Config geprüft wurde.
 if [ "$CONFIG_UPDATED" -eq 1 ]; then
     case "$1" in
-        --help|--version|--status|--gui-init|--check-stale|--capacity|--datasets|--snapshots|--targets|--dataset-snapshots|--snapshot-tree|--snapshot-ls|--snapshot-cat|--snapshot-restore|--log-tail|--log-follow|--progress-follow|--config-check|--config-schema|--borg-providers|--borg-archives|--borg-check-update|--get-config|--set-config|--add-target|--delete-target|--edit-target|--test-target|--reorder-targets|--move-target|--reset-statistics|--reset-run-status|--delete-logs|--thin-history|--delete-managed-snapshots|--cleanup-orphans|--stop)
+        --help|--version|--status|--gui-init|--check-stale|--capacity|--datasets|--snapshots|--targets|--dataset-snapshots|--snapshot-tree|--refresh-snapshots|--snapshot-ls|--snapshot-cat|--snapshot-restore|--log-tail|--log-follow|--progress-follow|--config-check|--config-schema|--borg-providers|--borg-archives|--borg-check-update|--get-config|--set-config|--add-target|--delete-target|--edit-target|--test-target|--reorder-targets|--move-target|--reset-statistics|--reset-run-status|--delete-logs|--thin-history|--delete-managed-snapshots|--cleanup-orphans|--stop)
             ;;
         *)
             echo

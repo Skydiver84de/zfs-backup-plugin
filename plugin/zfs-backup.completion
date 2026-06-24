@@ -10,7 +10,7 @@ _zfs_backup() {
 
     local commands="--help --version --run --stop --status --log-tail --simulate \
         --config-check --config-schema --get-config --set-config \
-        --datasets --snapshots --snapshot-tree --dataset-snapshots \
+        --datasets --snapshots --snapshot-tree --refresh-snapshots --dataset-snapshots \
         --snapshot-ls --snapshot-cat --capacity --targets \
         --add-target --edit-target --delete-target --test-target \
         --reorder-targets --move-target --borg-providers --borg-archives --borg-check-update \

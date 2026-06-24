@@ -30,6 +30,7 @@ $cli = '/usr/local/sbin/zfs-backup';
  * Rückfrage macht die GUI per confirm()). */
 $ACTIONS = [
     'simulate'                 => ['--simulate'],
+    'refresh-snapshots'        => ['--refresh-snapshots'],   // Snapshots-Seite live aktualisieren (read-only)
     'verify'                   => ['--verify'],
     'verify-source'            => ['--verify-source'],
     'verify-local'             => ['--verify-local'],

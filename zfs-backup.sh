@@ -8905,13 +8905,18 @@ handle_cli() {
             local sls_snap="${CLI_ARGS[2]:-}"
             local sls_scope="${CLI_ARGS[3]:-source}"
             local sls_path="${CLI_ARGS[4]:-}"
-            if [ -z "$sls_ds" ] || ! zfs_name_is_safe "$sls_ds" \
-               || [ -z "$sls_snap" ] || ! zfs_name_is_safe "$sls_snap"; then
-                echo '{"error":"ungültiges Dataset/Snapshot","entries":[]}'
-                exit 1
-            fi
+            # Scope zuerst – auch nötig, um borg zu erkennen: borg-Archivnamen (vor
+            # allem fremde unter „(andere)" mit „:"/„.") sind KEINE ZFS-Namen; die
+            # Prüfung übernimmt dann resolve_snapshot_browse (borg_archive_name_is_safe).
             if [ "$sls_scope" != "source" ] && ! target_id_is_valid "$sls_scope"; then
                 echo '{"error":"ungültiger Scope","entries":[]}'
+                exit 1
+            fi
+            local sls_borg=0
+            [ "$sls_scope" != "source" ] && [ "$(target_type "$sls_scope")" = "borg" ] && sls_borg=1
+            if [ -z "$sls_ds" ] || [ -z "$sls_snap" ] \
+               || { [ "$sls_borg" -eq 0 ] && { ! zfs_name_is_safe "$sls_ds" || ! zfs_name_is_safe "$sls_snap"; }; }; then
+                echo '{"error":"ungültiges Dataset/Snapshot","entries":[]}'
                 exit 1
             fi
             snapshot_ls_json "$sls_ds" "$sls_snap" "$sls_scope" "$sls_path"
@@ -8927,13 +8932,17 @@ handle_cli() {
             local sct_snap="${CLI_ARGS[2]:-}"
             local sct_scope="${CLI_ARGS[3]:-source}"
             local sct_path="${CLI_ARGS[4]:-}"
-            if [ -z "$sct_ds" ] || ! zfs_name_is_safe "$sct_ds" \
-               || [ -z "$sct_snap" ] || ! zfs_name_is_safe "$sct_snap"; then
-                echo "FEHLER: ungültiges Dataset/Snapshot" >&2
-                exit 1
-            fi
+            # Scope zuerst (borg-Erkennung wie bei --snapshot-ls); borg-Archivnamen
+            # sind keine ZFS-Namen -> nur bei Nicht-borg ZFS-validieren.
             if [ "$sct_scope" != "source" ] && ! target_id_is_valid "$sct_scope"; then
                 echo "FEHLER: ungültiger Scope" >&2
+                exit 1
+            fi
+            local sct_borg=0
+            [ "$sct_scope" != "source" ] && [ "$(target_type "$sct_scope")" = "borg" ] && sct_borg=1
+            if [ -z "$sct_ds" ] || [ -z "$sct_snap" ] \
+               || { [ "$sct_borg" -eq 0 ] && { ! zfs_name_is_safe "$sct_ds" || ! zfs_name_is_safe "$sct_snap"; }; }; then
+                echo "FEHLER: ungültiges Dataset/Snapshot" >&2
                 exit 1
             fi
             snapshot_cat "$sct_ds" "$sct_snap" "$sct_scope" "$sct_path"

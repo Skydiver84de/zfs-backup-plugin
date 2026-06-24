@@ -1559,12 +1559,21 @@ p.muted { color:#999; font-size:12px; }
   var lastChange = 0;
   function zbBump(){ lastChange = Date.now(); }
   function zbPad(n){ return (n < 10 ? '0' : '') + n; }
+  // Dauer lesbar: < 1 h als M:SS, ab 1 h als Hh MM:SS, ab 1 Tag als Dd Hh MM:SS.
+  function zbDur(s){
+    var d = Math.floor(s / 86400); s -= d * 86400;
+    var h = Math.floor(s / 3600);  s -= h * 3600;
+    var m = Math.floor(s / 60);    var sec = s - m * 60;
+    if (d) return d + 'd ' + zbPad(h) + 'h ' + zbPad(m) + ':' + zbPad(sec);
+    if (h) return h + 'h ' + zbPad(m) + ':' + zbPad(sec);
+    return m + ':' + zbPad(sec);
+  }
   function zbTick(){
     if (!elSince) return;
     if (!statusActive || !lastChange) { elSince.textContent = ''; return; }
     var s = Math.floor((Date.now() - lastChange) / 1000);
     // Erst ab ein paar Sekunden Stillstand anzeigen – bei aktiver Bewegung leer.
-    elSince.textContent = (s >= 4) ? ('· läuft seit ' + Math.floor(s/60) + ':' + zbPad(s%60)) : '';
+    elSince.textContent = (s >= 4) ? ('· läuft seit ' + zbDur(s)) : '';
   }
   setInterval(zbTick, 1000);
 

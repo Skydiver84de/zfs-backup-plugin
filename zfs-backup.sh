@@ -1879,11 +1879,20 @@ build_notify_message() {
     local runtime
     local datasets
     local last_error
+    local borg_prune="" borg_repl_nl=""
 
     result=$(read_run_stat RESULT "-")
     runtime=$(read_run_stat RUNTIME_SECONDS 0)
     datasets=$(read_run_stat DATASETS 0)
     created_total=$(read_run_stat CREATED_TOTAL 0)
+
+    # borg nur einblenden, wenn ein borg-Ziel konfiguriert ist (sonst keine Zeile
+    # voller Nullen in der Nachricht). borg_repl_nl bringt seinen eigenen Zeilen-
+    # umbruch mit -> kein Leerraum, wenn leer.
+    if [ "$(target_enabled_count borg)" -gt 0 ]; then
+        borg_prune=", Borg $(read_run_stat BORG_DELETED 0)"
+        borg_repl_nl=$'\n'"Borg: $(read_run_stat BORG_CREATED 0) neu, $(read_run_stat BORG_SKIPPED 0) vorhanden, $(read_run_stat BORG_ERRORS 0) Fehler"
+    fi
 
     cat <<EOF
 Ergebnis: ${result}
@@ -1892,10 +1901,10 @@ Laufzeit: $(format_duration "$runtime") | Datasets: ${datasets}
 Snapshots: ${created_total} neu (H $(read_run_stat CREATED_HOURLY 0), D $(read_run_stat CREATED_DAILY 0), W $(read_run_stat CREATED_WEEKLY 0), M $(read_run_stat CREATED_MONTHLY 0), Y $(read_run_stat CREATED_YEARLY 0))
 Bestand Quelle: $(read_run_stat SOURCE_INVENTORY_TOTAL 0) verwaltet (H $(read_run_stat SOURCE_INVENTORY_HOURLY 0), D $(read_run_stat SOURCE_INVENTORY_DAILY 0), W $(read_run_stat SOURCE_INVENTORY_WEEKLY 0), M $(read_run_stat SOURCE_INVENTORY_MONTHLY 0), Y $(read_run_stat SOURCE_INVENTORY_YEARLY 0))
 
-Pruning: Quelle $(read_run_stat DELETED 0), Lokal $(read_run_stat LOCAL_DELETED 0), Remote $(read_run_stat REMOTE_DELETED 0) gelöscht
+Pruning: Quelle $(read_run_stat DELETED 0), Lokal $(read_run_stat LOCAL_DELETED 0), Remote $(read_run_stat REMOTE_DELETED 0)${borg_prune} gelöscht
 Verwaiste Datasets / Snapshots: $(read_run_stat ORPHAN_DATASETS 0) Ziel-Dataset(s), $(read_run_stat SOURCE_ORPHAN_SNAPSHOTS 0) Quell-Snapshot(s) in $(read_run_stat SOURCE_ORPHAN_DATASETS 0) Dataset(s) (nicht automatisch gelöscht; Aufräumen: --cleanup-orphans)
 Lokal: $(read_run_stat REPLICATION_FULL 0) Full, $(read_run_stat REPLICATION_INCREMENTAL 0) Incr, $(read_run_stat REPLICATION_RESUMED 0) Resume, $(read_run_stat REPLICATION_SKIPPED 0) aktuell, $(read_run_stat REPLICATION_ERRORS 0) Fehler
-Remote: $(read_run_stat REMOTE_REPLICATION_FULL 0) Full, $(read_run_stat REMOTE_REPLICATION_INCREMENTAL 0) Incr, $(read_run_stat REMOTE_REPLICATION_RESUMED 0) Resume, $(read_run_stat REMOTE_REPLICATION_SKIPPED 0) aktuell, $(read_run_stat REMOTE_REPLICATION_ERRORS 0) Fehler
+Remote: $(read_run_stat REMOTE_REPLICATION_FULL 0) Full, $(read_run_stat REMOTE_REPLICATION_INCREMENTAL 0) Incr, $(read_run_stat REMOTE_REPLICATION_RESUMED 0) Resume, $(read_run_stat REMOTE_REPLICATION_SKIPPED 0) aktuell, $(read_run_stat REMOTE_REPLICATION_ERRORS 0) Fehler${borg_repl_nl}
 
 Speicher: Quelle $(format_bytes "$(read_run_stat SOURCE_SNAPSHOT_USED 0)"), Lokal $(format_bytes "$(read_run_stat LOCAL_SNAPSHOT_USED 0)"), Remote $(format_bytes "$(read_run_stat REMOTE_SNAPSHOT_USED 0)")
 EOF
@@ -9550,6 +9559,10 @@ REMOTE_REPLICATION_INCREMENTAL=${REMOTE_REPLICATION_INCREMENTAL}
 REMOTE_REPLICATION_RESUMED=${REMOTE_REPLICATION_RESUMED}
 REMOTE_REPLICATION_SKIPPED=${REMOTE_REPLICATION_SKIPPED}
 REMOTE_REPLICATION_ERRORS=${REMOTE_REPLICATION_ERRORS}
+BORG_CREATED=${BORG_CREATED_ARCHIVES}
+BORG_SKIPPED=${BORG_SKIPPED_ARCHIVES}
+BORG_DELETED=${BORG_DELETED_ARCHIVES}
+BORG_ERRORS=${BORG_REPLICATION_ERRORS}
 EOF
 
     # Kompakte Bilanz ins Logfile (die ausführliche Statistik oben geht nur auf

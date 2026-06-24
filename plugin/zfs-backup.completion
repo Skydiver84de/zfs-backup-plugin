@@ -8,7 +8,7 @@ _zfs_backup() {
     prev="${COMP_WORDS[COMP_CWORD-1]}"
     bin="${COMP_WORDS[0]}"
 
-    local commands="--help --version --run --status --log-tail --simulate \
+    local commands="--help --version --run --stop --status --log-tail --simulate \
         --config-check --config-schema --get-config --set-config \
         --datasets --snapshots --snapshot-tree --dataset-snapshots \
         --snapshot-ls --snapshot-cat --capacity --targets \

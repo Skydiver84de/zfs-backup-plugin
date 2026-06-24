@@ -72,6 +72,7 @@ CONFIG_CREATED=0
 CONFIG_UPDATED=0
 CONFIG_ADDED_OPTIONS=()
 RUN_ACTIVE=0
+RUN_INTERRUPTED=0
 SELF_DATASETS=()
 SELF_DATASETS_COMPUTED=0
 VERBOSE=0
@@ -1658,6 +1659,55 @@ release_lock() {
 
     rm -f "$LOCK_FILE"
     rm -f "${STATE_DIR}/run_progress"
+}
+
+# SIGINT/SIGTERM während eines Laufs (GUI „Lauf abbrechen" bzw. `--stop`): sauber
+# abbrechen statt hart sterben. Die Kindprozesse (borg/ssh/zfs) erhalten das Signal
+# über die Prozessgruppe (Start per setsid) ohnehin mit; hier nur eigenes Aufräumen
+# (verwaiste Bind-Mounts lösen, Lock/Progress entfernen) + Statusvermerk.
+on_interrupt() {
+    trap '' INT TERM    # weitere Signale während des Aufräumens ignorieren
+    RUN_INTERRUPTED=1
+    log "Snapshotlauf abgebrochen (Signal empfangen)"
+    write_state last_error "$(date '+%d.%m.%Y %H:%M:%S') Lauf abgebrochen"
+    borg_src_cleanup_all 2>/dev/null
+    release_lock
+    console_warn "Lauf abgebrochen"
+    exit 130
+}
+
+# `--stop`: einen laufenden Lauf abbrechen. Sendet SIGTERM an die PROZESSGRUPPE des
+# Laufs (negative PID; der Lauf startet per setsid als eigener Gruppenleiter -> so
+# sterben borg/ssh/zfs mit), eskaliert nach kurzer Wartezeit auf SIGKILL und räumt
+# Lock/Mounts auf, falls der Prozess es nicht mehr selbst schafft.
+cli_stop_run() {
+    local pid i=0
+    if [ ! -f "$LOCK_FILE" ]; then
+        console_info "Es läuft gerade kein Lauf."
+        return 0
+    fi
+    pid=$(cat "$LOCK_FILE" 2>/dev/null)
+    case "$pid" in
+        ''|*[!0-9]*) console_warn "Keine gültige Lauf-PID gefunden."; return 1 ;;
+    esac
+    if ! kill -0 "$pid" 2>/dev/null; then
+        console_info "Lauf nicht (mehr) aktiv – Lock wird bereinigt."
+        release_lock
+        return 0
+    fi
+    log "Stop angefordert (PID ${pid}) – SIGTERM an die Prozessgruppe"
+    kill -TERM "-${pid}" 2>/dev/null || kill -TERM "$pid" 2>/dev/null
+    while [ "$i" -lt 100 ] && kill -0 "$pid" 2>/dev/null; do sleep 0.1; i=$((i+1)); done
+    if kill -0 "$pid" 2>/dev/null; then
+        log "Stop: Prozess reagiert nicht – SIGKILL"
+        kill -KILL "-${pid}" 2>/dev/null || kill -KILL "$pid" 2>/dev/null
+        sleep 0.3
+    fi
+    # Falls der abgebrochene Prozess nicht mehr selbst aufräumen konnte:
+    release_lock
+    borg_src_cleanup_all 2>/dev/null
+    console_success "Lauf abgebrochen."
+    return 0
 }
 
 # Schreibt den aktuellen Lauf-Fortschritt maschinenlesbar für die GUI. Nur
@@ -8083,6 +8133,12 @@ Verwendung:
       Status anzeigen. Mit --json maschinenlesbar fürs GUI-Dashboard.
       Bei laufendem Backup enthält das JSON ein progress-Objekt (Phase).
 
+  zfs-backup.sh --stop
+      Einen laufenden Snapshotlauf abbrechen (SIGTERM an die Prozessgruppe,
+      danach SIGKILL). Kindprozesse (borg/ssh/zfs) werden mitbeendet; Lock und
+      Bind-Mounts werden aufgeräumt. Bereits erstellte Archive/Snapshots bleiben;
+      der nächste Lauf setzt sauber fort.
+
   zfs-backup.sh --gui-init --json
       GUI-intern: Status, Kapazität (cached), Schema, Konfigwerte und Ziele in
       EINEM JSON-Objekt (ein Aufruf statt fünf beim Seitenaufbau).
@@ -8346,6 +8402,12 @@ handle_cli() {
         --run)
 
             return 0
+            ;;
+
+        --stop)
+
+            cli_stop_run
+            exit $?
             ;;
 
         --version)
@@ -9474,7 +9536,7 @@ fi
 # Befehlen, die das brauchen (Lauf/Pflege/Schreiben). Reine Lese-Befehle, die die
 # GUI beim Seitenaufbau mehrfach aufruft, überspringen das (Performance).
 case "$1" in
-    --version|--help|--status|--gui-init|--capacity|--datasets|--snapshots|--snapshot-tree|--dataset-snapshots|--snapshot-ls|--snapshot-cat|--targets|--config-schema|--borg-providers|--get-config|--log-tail|--log-follow|--progress-follow|--check-stale)
+    --version|--help|--status|--gui-init|--capacity|--datasets|--snapshots|--snapshot-tree|--dataset-snapshots|--snapshot-ls|--snapshot-cat|--targets|--config-schema|--borg-providers|--get-config|--log-tail|--log-follow|--progress-follow|--check-stale|--stop)
         ;;
     *)
         config_maintain
@@ -9485,7 +9547,7 @@ esac
 # wird blockiert, bis die Config geprüft wurde.
 if [ "$CONFIG_UPDATED" -eq 1 ]; then
     case "$1" in
-        --help|--version|--status|--gui-init|--check-stale|--capacity|--datasets|--snapshots|--targets|--dataset-snapshots|--snapshot-tree|--snapshot-ls|--snapshot-cat|--snapshot-restore|--log-tail|--log-follow|--progress-follow|--config-check|--config-schema|--borg-providers|--borg-archives|--borg-check-update|--get-config|--set-config|--add-target|--delete-target|--edit-target|--test-target|--reorder-targets|--move-target|--reset-statistics|--reset-run-status|--delete-logs|--thin-history|--delete-managed-snapshots|--cleanup-orphans)
+        --help|--version|--status|--gui-init|--check-stale|--capacity|--datasets|--snapshots|--targets|--dataset-snapshots|--snapshot-tree|--snapshot-ls|--snapshot-cat|--snapshot-restore|--log-tail|--log-follow|--progress-follow|--config-check|--config-schema|--borg-providers|--borg-archives|--borg-check-update|--get-config|--set-config|--add-target|--delete-target|--edit-target|--test-target|--reorder-targets|--move-target|--reset-statistics|--reset-run-status|--delete-logs|--thin-history|--delete-managed-snapshots|--cleanup-orphans|--stop)
             ;;
         *)
             echo
@@ -9509,6 +9571,7 @@ fi
 handle_cli "$@"
 
 acquire_lock
+trap on_interrupt INT TERM
 trap release_lock EXIT
 RUN_ACTIVE=1
 START_TIME=$(date +%s)

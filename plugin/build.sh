@@ -113,6 +113,7 @@ install -m 0644 "$SELF_DIR/include/snapshot-file.php" "$DEST/include/snapshot-fi
 install -m 0644 "$SELF_DIR/include/snapshot-restore.php" "$DEST/include/snapshot-restore.php"
 install -m 0644 "$SELF_DIR/include/maintenance.php" "$DEST/include/maintenance.php"
 install -m 0644 "$SELF_DIR/include/run.php"       "$DEST/include/run.php"
+install -m 0644 "$SELF_DIR/include/stop.php"      "$DEST/include/stop.php"
 install -m 0644 "$SELF_DIR/include/logs.php"      "$DEST/include/logs.php"
 install -m 0644 "$SELF_DIR/include/log-stream.php" "$DEST/include/log-stream.php"
 install -m 0644 "$SELF_DIR/include/schedule.php"  "$DEST/include/schedule.php"

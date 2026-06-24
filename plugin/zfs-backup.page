@@ -515,6 +515,7 @@ p.muted { color:#999; font-size:12px; }
 
   <div class="zb-actions">
     <input type="button" id="zb-run-btn" value="Lauf starten"<?= $isRunning ? ' style="display:none"' : '' ?>>
+    <input type="button" id="zb-stop-btn" value="Lauf abbrechen"<?= $isRunning ? '' : ' style="display:none"' ?>>
     <input type="button" id="zb-sim-btn" value="Simulieren">
     <span id="zb-run-msg" class="zb-savemsg"></span>
   </div>
@@ -1535,6 +1536,7 @@ p.muted { color:#999; font-size:12px; }
   var elDetail = document.getElementById('zb-prog-detail'); // Unterschritt/Prozent
   var elSince  = document.getElementById('zb-prog-since');  // „läuft seit …"
   var runBtn   = document.getElementById('zb-run-btn');
+  var stopBtn  = document.getElementById('zb-stop-btn');
   var badgeEl  = document.getElementById('zb-badge');
   var statusES = null;
   var statusActive = false;        // soll der Status-Stream offen sein?
@@ -1545,6 +1547,7 @@ p.muted { color:#999; font-size:12px; }
   function zbShowRunning(){
     if (progEl) { progEl.dataset.running = '1'; progEl.style.display = ''; }
     if (runBtn) runBtn.style.display = 'none';
+    if (stopBtn) { stopBtn.style.display = ''; stopBtn.disabled = false; stopBtn.value = 'Lauf abbrechen'; }
     if (badgeEl) { badgeEl.textContent = 'läuft'; badgeEl.className = 'zb-badge run'; }
     var warn = document.querySelector('.zb-warn');   // „veraltet"-Banner während des Laufs ausblenden
     if (warn) warn.style.display = 'none';
@@ -1649,6 +1652,31 @@ p.muted { color:#999; font-size:12px; }
           runBtn.disabled = false;
           if (msg) { msg.className = 'zb-savemsg err';
             msg.textContent = (r.data && (r.data.msg || r.data.error)) || 'Start fehlgeschlagen.'; }
+        }
+      });
+    });
+  }
+
+  // „Lauf abbrechen": bricht den laufenden Lauf ab (SIGTERM->SIGKILL an die
+  // Prozessgruppe). Das Lauf-Ende erkennt anschließend der Status-Stream („done")
+  // und lädt die Seite neu -> korrekter Ausgangszustand.
+  if (stopBtn) {
+    stopBtn.addEventListener('click', function(){
+      var msg = document.getElementById('zb-run-msg');
+      if (!confirm('Den laufenden Backup-Lauf wirklich abbrechen?\n\n'
+                 + 'Bereits erstellte Snapshots/Archive bleiben erhalten; der '
+                 + 'nächste Lauf setzt sauber fort.')) return;
+      stopBtn.disabled = true;
+      stopBtn.value = 'Wird abgebrochen …';
+      if (msg) { msg.className = 'zb-savemsg'; msg.textContent = 'Abbruch angefordert …'; }
+      zbPost('/plugins/zfs-backup/include/stop.php', {}).then(function(r){
+        if (r.data && r.data.ok) {
+          if (msg) msg.textContent = 'Lauf wird beendet …';
+        } else {
+          stopBtn.disabled = false;
+          stopBtn.value = 'Lauf abbrechen';
+          if (msg) { msg.className = 'zb-savemsg err';
+            msg.textContent = (r.data && (r.data.msg || r.data.error)) || 'Abbruch fehlgeschlagen.'; }
         }
       });
     });

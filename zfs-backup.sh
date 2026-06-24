@@ -7020,7 +7020,12 @@ replicate_dataset_borg() {
         src="$root"; mnt=""
         if mnt=$(borg_src_mount "$ds" "$root"); then src="$mnt"; else mnt=""; fi
         # cd in den (stabilen) Snapshot-Root, „." sichern -> Archiv enthält relative Pfade.
-        ( cd "$src" && borg_run create --one-file-system --log-json --progress "::${archive}" . \
+        # --checkpoint-interval 600: alle 10 Min einen Checkpoint (statt borg-Default
+        # 30 Min). Bei Abbruch/Absturz geht so höchstens ~10 Min verloren; der nächste
+        # Lauf setzt am Checkpoint fort (Dedup spart den Re-Upload, files-cache das
+        # Re-Lesen bereits erfasster Dateien).
+        ( cd "$src" && borg_run create --one-file-system --checkpoint-interval 600 \
+            --log-json --progress "::${archive}" . \
             2> >(borg_create_progress "$_btotal" "$archive") )
         rc=$?
         borg_src_umount "$mnt"

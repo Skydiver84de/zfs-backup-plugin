@@ -223,12 +223,16 @@ $csrf = $var['csrf_token'] ?? '';
 .zb-caret { display:inline-block; width:1em; color:#888; transition:transform .12s; }
 .zb-ds-row.open .zb-caret { transform:rotate(90deg); }
 .zb-ds-detail > td { padding:0 12px 12px 26px; }
-.zb-snaptbl { width:100%; border-collapse:collapse; }
+.zb-snaptbl { width:100%; border-collapse:collapse; table-layout:fixed; }
 .zb-snaptbl th, .zb-snaptbl td { text-align:left; padding:5px 10px; font-size:13px;
               border-bottom:1px solid rgba(128,128,128,.14); }
 .zb-snaptbl th { color:#999; font-size:11px; text-transform:uppercase; letter-spacing:.04em; }
 .zb-snaptbl td.num, .zb-snaptbl th.num { text-align:right; font-variant-numeric:tabular-nums; }
-.zb-snaptbl td.mono { font-family:monospace; font-size:12px; word-break:break-all; }
+/* Namensspalte umbricht (lange Borg-Fremdarchiv-Namen) – feste Spaltenbreiten via
+   colgroup halten den Durchsuchen-Button immer sichtbar. */
+.zb-snaptbl td.mono { font-family:monospace; font-size:12px; overflow-wrap:anywhere; word-break:break-word; }
+.zb-snaptbl td.act { text-align:right; }
+.zb-snaptbl .zb-fb-open { padding:3px 8px; font-size:11px; white-space:nowrap; }
 .zb-snaptbl tr.zb-snapgrp td { background:rgba(128,128,128,.10); font-weight:700;
               font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:#888; }
 .zb-warn { margin:0 0 16px; padding:10px 14px; border-radius:8px;
@@ -1185,7 +1189,10 @@ p.muted { color:#999; font-size:12px; }
       var t = LABEL[x.type] ? x.type : 'Snapshot';
       (groups[t] = groups[t] || []).push(x);
     });
-    var h = '<table class="zb-snaptbl"><thead><tr><th>Snapshot</th><th>Typ</th>'
+    var h = '<table class="zb-snaptbl">'
+          + '<colgroup><col><col style="width:5.5em"><col style="width:6em">'
+          + '<col style="width:6em"><col style="width:12.5em"><col style="width:8.5em"></colgroup>'
+          + '<thead><tr><th>Snapshot</th><th>Typ</th>'
           + '<th class="num" title="Referenzierte Datenmenge – das, was beim Wiederherstellen herauskommt">Größe</th>'
           + '<th class="num" title="Exklusiv belegter Platz – wird beim Löschen dieses Snapshots frei">Belegt</th>'
           + '<th>Erstellt</th><th></th></tr></thead><tbody>';
@@ -1203,7 +1210,7 @@ p.muted { color:#999; font-size:12px; }
         h += '<tr><td class="mono">' + zbEsc(x.snapshot) + '</td><td>' + zbEsc(x.type)
            + '</td><td class="num">' + zbBytes(x.size) + '</td><td class="num">' + zbBytes(x.used)
            + '</td><td>' + zbEsc(x.created) + '</td>'
-           + '<td class="num">' + act + '</td></tr>';
+           + '<td class="act">' + act + '</td></tr>';
       });
     });
     return h + '</tbody></table>';

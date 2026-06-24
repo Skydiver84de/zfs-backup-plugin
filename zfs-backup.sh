@@ -3770,19 +3770,14 @@ resolve_snapshot_browse() {
     BROWSE_BORG_ARCHIVE=""
 
     # borg-Ziel: anderes Modell (kein Mountpoint, kein .zfs/snapshot). Browsen =
-    # `borg list ::archiv`. Archivname: verwaltetes Archiv = <ds%>__<snap>, ein
-    # FREMDES Archiv erscheint als Pseudo-Dataset „(andere)" -> der Archivname IST
-    # der „Snapshot". Vorgeschaltet, weil ds/snap dann keine ZFS-Namen sind.
+    # `borg list ::archiv` des verwalteten Archivs <ds%>__<snap>. Vorgeschaltet,
+    # weil borg-Archive nicht über .zfs/snapshot zugänglich sind.
     if [ "$scope" != "source" ] && target_id_is_valid "$scope" \
         && [ "$(target_type "$scope")" = "borg" ]; then
         load_target_context "$scope" || return 1
-        if [ "$ds" = "(andere)" ]; then
-            BROWSE_BORG_ARCHIVE="$snap"
-        else
-            zfs_name_is_safe "$ds" || return 1
-            zfs_name_is_safe "$snap" || return 1
-            BROWSE_BORG_ARCHIVE="$(borg_archive_name "$ds" "$snap")"
-        fi
+        zfs_name_is_safe "$ds" || return 1
+        zfs_name_is_safe "$snap" || return 1
+        BROWSE_BORG_ARCHIVE="$(borg_archive_name "$ds" "$snap")"
         borg_archive_name_is_safe "$BROWSE_BORG_ARCHIVE" || return 1
         borg_ensure_binary >/dev/null 2>&1 || return 1
         BROWSE_MODE="borg"
@@ -3887,8 +3882,8 @@ remote_snapshot_ls_raw() {
 # lokale/remote Script (typ<TAB>größe<TAB>mtime<TAB>name, NUL-getrennt), damit
 # snapshot_ls_json unverändert weiterparst. `borg list ::archiv <rel>` listet den
 # Teilbaum rekursiv; awk reduziert auf die DIREKTEN Kinder von rel. Archivname aus
-# BROWSE_BORG_ARCHIVE (von resolve_snapshot_browse gesetzt – deckt auch fremde
-# „(andere)"-Archive ab). $1 = rel (Unterpfad, leer = Archivwurzel).
+# BROWSE_BORG_ARCHIVE (von resolve_snapshot_browse gesetzt). $1 = rel (Unterpfad,
+# leer = Archivwurzel).
 borg_snapshot_ls_raw() {
     local rel="$1" archive="$BROWSE_BORG_ARCHIVE"
     [ -n "$archive" ] || return 1
@@ -4511,13 +4506,13 @@ write_snapshots_list_cache() {
                     { [ "$BORG_READY" -eq 1 ] && [ "$BORG_READY_REPO" = "$BORG_REPO" ]; } || continue
                 fi
                 # {time:%s} = Erstellzeit als Unix-Epoch (Python-strftime via borg
-                # --format; numerisch geprüft, sonst 0). Eigene Archive <ds%>__<snap>
-                # -> <ds>@<snap>; FREMDE Archive (anderes Schema, z. B. bestehende
-                # Backups im selben Repo) -> Pseudo-Dataset „(andere)". Eine Größe je
-                # Archiv liefert borg list nicht (nur borg info) -> used/refer = 0.
-                # Größen aus dem persistenten Größen-Cache nachschlagen (used=dedup,
-                # referenced=original). FILENAME-Vergleich statt NR==FNR (robust auch
-                # bei leerem Größen-Cache). Größen-Cache nie leeren – nur anlegen.
+                # --format; numerisch geprüft, sonst 0). Nur EIGENE Archive
+                # <ds%>__<snap> -> <ds>@<snap>; fremde Archive (anderes Schema, z. B.
+                # bestehende Backups im selben Repo) werden ignoriert – die verwaltet
+                # das Plugin bewusst nicht. Eine Größe je Archiv liefert borg list
+                # nicht (nur borg info) -> used/refer = 0. Größen aus dem persistenten
+                # Größen-Cache nachschlagen (used=dedup, referenced=original).
+                # FILENAME-Vergleich statt NR==FNR (robust auch bei leerem Größen-Cache).
                 local _szc
                 _szc=$(borg_size_cache_file "$tid")
                 [ -f "$_szc" ] || { : > "$_szc" 2>/dev/null || _szc=/dev/null; }
@@ -4528,7 +4523,7 @@ write_snapshots_list_cache() {
                             if (ts !~ /^[0-9]+$/) ts=0
                             orig=(arch in o)?o[arch]:0; dedup=(arch in d)?d[arch]:0
                             i=index(arch,sep)
-                            if (i==0) { printf "(andere)@%s\t%d\t%d\t%d\n", arch, dedup, orig, ts; next }
+                            if (i==0) next            # fremdes Archiv -> ignorieren
                             dsm=substr(arch,1,i-1); snap=substr(arch,i+2)
                             gsub(/%/,"/",dsm)
                             printf "%s@%s\t%d\t%d\t%d\n", dsm, snap, dedup, orig, ts
@@ -4606,20 +4601,6 @@ scope_json() {
             "$(json_num "$dm")" "$(json_num "$dy")" "$(json_num "$dt")" \
             "$(json_num "$du")"
     done < <(get_datasets)
-
-    # borg: fremde Archive (nicht von uns erstellt) als Pseudo-Dataset „(andere)"
-    # anhängen – damit sichtbar, später im Browser durchsuchbar/löschbar. Zählung
-    # separat (kein Typ-Split); Größe unbekannt.
-    if [ "$kind" = "borg" ]; then
-        local other_n
-        other_n=$(grep -c -F -- "(andere)@" "$cache" 2>/dev/null) || other_n=0
-        if [ "${other_n:-0}" -gt 0 ]; then
-            tt=$((tt+other_n))
-            [ "$first" -eq 1 ] && first=0 || printf ','
-            printf '{"dataset":"%s","source":"%s","hourly":0,"daily":0,"weekly":0,"monthly":0,"yearly":0,"total":%s,"used":0}' \
-                "$(json_escape "(andere)")" "$(json_escape "(andere)")" "$(json_num "$other_n")"
-        fi
-    fi
 
     printf '],"totals":{"hourly":%s,"daily":%s,"weekly":%s,"monthly":%s,"yearly":%s,"total":%s,"used":%s}}' \
         "$(json_num "$th")" "$(json_num "$td")" "$(json_num "$tw")" \
@@ -8220,8 +8201,7 @@ Verwendung:
       Verzeichnisinhalt eines Snapshots als JSON (Datei-Browser). <scope> =
       "source" oder eine Ziel-ID. Liest ins Dataset (.zfs/snapshot) und WECKT
       ggf. die Platte/den Remote – bewusste Nutzeraktion. Bei einem borg-Ziel
-      wird das Archiv durchsucht (`borg list`); fremde Archive erscheinen unter
-      dem Pseudo-Dataset "(andere)" (dann ist <snapshot> der Archivname).
+      wird das verwaltete Archiv durchsucht (`borg list`).
 
   zfs-backup.sh --snapshot-cat <dataset> <snapshot> <scope> <unterpfad>
       Inhalt EINER Datei aus einem Snapshot auf stdout (Download/Vorschau).
@@ -8828,10 +8808,7 @@ handle_cli() {
             # Datasets). Optionaler Scope: "source" (Default) oder eine Ziel-ID.
             local dss_ds="${CLI_ARGS[1]:-}"
             local dss_scope="${CLI_ARGS[2]:-source}"
-            # „(andere)" ist das Pseudo-Dataset fremder borg-Archive (kein ZFS-Name)
-            # -> bewusst von der zfs_name_is_safe-Prüfung ausgenommen. managed_dataset_
-            # snapshots filtert ohnehin nur per „<ds>@"-Präfix aus dem Cache.
-            if [ -z "$dss_ds" ] || { [ "$dss_ds" != "(andere)" ] && ! zfs_name_is_safe "$dss_ds"; }; then
+            if [ -z "$dss_ds" ] || ! zfs_name_is_safe "$dss_ds"; then
                 if [ "$CLI_FORMAT" = "json" ]; then
                     echo '{"error":"ungültiges Dataset","snapshots":[]}'
                 else
@@ -8905,18 +8882,13 @@ handle_cli() {
             local sls_snap="${CLI_ARGS[2]:-}"
             local sls_scope="${CLI_ARGS[3]:-source}"
             local sls_path="${CLI_ARGS[4]:-}"
-            # Scope zuerst – auch nötig, um borg zu erkennen: borg-Archivnamen (vor
-            # allem fremde unter „(andere)" mit „:"/„.") sind KEINE ZFS-Namen; die
-            # Prüfung übernimmt dann resolve_snapshot_browse (borg_archive_name_is_safe).
-            if [ "$sls_scope" != "source" ] && ! target_id_is_valid "$sls_scope"; then
-                echo '{"error":"ungültiger Scope","entries":[]}'
+            if [ -z "$sls_ds" ] || ! zfs_name_is_safe "$sls_ds" \
+               || [ -z "$sls_snap" ] || ! zfs_name_is_safe "$sls_snap"; then
+                echo '{"error":"ungültiges Dataset/Snapshot","entries":[]}'
                 exit 1
             fi
-            local sls_borg=0
-            [ "$sls_scope" != "source" ] && [ "$(target_type "$sls_scope")" = "borg" ] && sls_borg=1
-            if [ -z "$sls_ds" ] || [ -z "$sls_snap" ] \
-               || { [ "$sls_borg" -eq 0 ] && { ! zfs_name_is_safe "$sls_ds" || ! zfs_name_is_safe "$sls_snap"; }; }; then
-                echo '{"error":"ungültiges Dataset/Snapshot","entries":[]}'
+            if [ "$sls_scope" != "source" ] && ! target_id_is_valid "$sls_scope"; then
+                echo '{"error":"ungültiger Scope","entries":[]}'
                 exit 1
             fi
             snapshot_ls_json "$sls_ds" "$sls_snap" "$sls_scope" "$sls_path"
@@ -8932,17 +8904,13 @@ handle_cli() {
             local sct_snap="${CLI_ARGS[2]:-}"
             local sct_scope="${CLI_ARGS[3]:-source}"
             local sct_path="${CLI_ARGS[4]:-}"
-            # Scope zuerst (borg-Erkennung wie bei --snapshot-ls); borg-Archivnamen
-            # sind keine ZFS-Namen -> nur bei Nicht-borg ZFS-validieren.
-            if [ "$sct_scope" != "source" ] && ! target_id_is_valid "$sct_scope"; then
-                echo "FEHLER: ungültiger Scope" >&2
+            if [ -z "$sct_ds" ] || ! zfs_name_is_safe "$sct_ds" \
+               || [ -z "$sct_snap" ] || ! zfs_name_is_safe "$sct_snap"; then
+                echo "FEHLER: ungültiges Dataset/Snapshot" >&2
                 exit 1
             fi
-            local sct_borg=0
-            [ "$sct_scope" != "source" ] && [ "$(target_type "$sct_scope")" = "borg" ] && sct_borg=1
-            if [ -z "$sct_ds" ] || [ -z "$sct_snap" ] \
-               || { [ "$sct_borg" -eq 0 ] && { ! zfs_name_is_safe "$sct_ds" || ! zfs_name_is_safe "$sct_snap"; }; }; then
-                echo "FEHLER: ungültiges Dataset/Snapshot" >&2
+            if [ "$sct_scope" != "source" ] && ! target_id_is_valid "$sct_scope"; then
+                echo "FEHLER: ungültiger Scope" >&2
                 exit 1
             fi
             snapshot_cat "$sct_ds" "$sct_snap" "$sct_scope" "$sct_path"

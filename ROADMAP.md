@@ -20,10 +20,9 @@ Repo hält mehrere Datasets namespaced (Wiederverwendung des bestehenden Repos).
   Verzeichnisebene über `borg list ::archiv <pfad>` (auf direkte Kinder gefiltert,
   gleiches Roh-Format wie lokal/remote), Vorschau/Download per `borg extract
   --stdout`, Einzeldatei-/Ordner-Restore in den `_restore`-Ordner des Quell-
-  Datasets. Fremde Archive unter „(andere)" sind browse-/herunterladbar, aber ohne
-  Restore (kein zugehöriges Quell-Dataset). Kein Löschen fremder Archive über die
-  GUI: der Bestand wird ausschließlich übers Pruning gepflegt; einzelne fremde
-  Archive bei Bedarf manuell per `borg delete`.
+  Datasets. Nur die vom Plugin verwalteten Archive (`<ds%>__<snap>`); fremde
+  Archive im selben Repo verwaltet das Plugin bewusst NICHT (bei Bedarf direkt per
+  borg-Terminalbefehlen).
 * **borg-Versions-Update-Check (informativ):** vergleicht die installierte
   borg-Version mit der neuesten GitHub-Release (gecacht 1×/Tag), Hinweis in
   `--config-check`/GUI/`--borg-check-update`. Kein Auto-Update (Binary gepinnt;
@@ -43,10 +42,9 @@ Repo hält mehrere Datasets namespaced (Wiederverwendung des bestehenden Repos).
   hinzufügen" (Typ borg), Bearbeiten (Repo, Passphrase, SSH-Optionen, Compact),
   Testen, Tabellen-/Status-Anzeige.
 * **Snapshots-Seite:** borg-Ziele erscheinen wie remote als eigener Scope mit
-  Datasets + Archiv-Zählungen; beim Aufklappen die einzelnen Archive (inkl.
-  zusätzlicher) mit Erstellzeit. Cache-basiert über `borg list` + Demangling
-  `<ds%>__<snap>`. Fremde Archive (nicht von uns) erscheinen als Pseudo-Dataset
-  „(andere)".
+  Datasets + Archiv-Zählungen; beim Aufklappen die einzelnen Archive mit
+  Erstellzeit. Cache-basiert über `borg list` + Demangling `<ds%>__<snap>`. Nur
+  die verwalteten Archive; fremde Archive im selben Repo werden ignoriert.
 * **Kapazität:** borg-Ziele zeigen die deduplizierte Repo-Größe (belegt) aus
   `borg info` in der Kapazitätstabelle (kein Frei/Limit – Repo ohne festes Limit).
 * **Archivgröße:** Größe je Archiv (original/dedupliziert) wird beim Erstellen per

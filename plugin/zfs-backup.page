@@ -270,6 +270,13 @@ $csrf = $var['csrf_token'] ?? '';
                   line-height:1.5; color:#1E88E5; }
 .zb-prog-detail:empty { display:none; }
 .zb-since { color:#888; font-size:12px; font-style:italic; margin-left:6px; }
+.zb-detail-toggle { font-size:12px; color:#1E88E5; text-decoration:none; cursor:pointer; }
+.zb-detail-toggle:hover { text-decoration:underline; }
+.zb-detail-panel { margin-top:6px; }
+.zb-detail-log { margin:0; padding:8px 11px; max-height:38vh; overflow:auto;
+                 white-space:pre-wrap; word-break:break-word; font-family:monospace;
+                 font-size:12px; line-height:1.55; background:rgba(0,0,0,.05);
+                 border:1px solid rgba(30,136,229,.30); border-radius:6px; }
 
 /* Gruppen-Box (Editor „Ziel bearbeiten" und „Ziel hinzufügen"). Die Felder darin
    werden über Unraids Markdown-Konverter gerendert (native Inline-Hilfe). */
@@ -511,6 +518,12 @@ p.muted { color:#999; font-size:12px; }
     <span class="zb-ver" id="zb-prog-meta"><?= $isRunning ? 'gestartet ' . zb_h($pg['started'] ?? null, '') . ' · aktualisiert ' . zb_h($pg['updated'] ?? null, '') : '' ?></span>
     <div class="zb-prog-log" id="zb-prog-log"><?= $isRunning ? zb_h($runLine, '') : '' ?></div>
     <div class="zb-prog-detail" id="zb-prog-detail"><?= $isRunning ? zb_h($pg['detail'] ?? '', '') : '' ?></div>
+    <div style="margin-top:8px">
+      <a href="#" id="zb-detail-toggle" class="zb-detail-toggle">▸ Aktivität anzeigen</a>
+    </div>
+    <div class="zb-detail-panel" id="zb-detail-panel" hidden>
+      <pre class="zb-detail-log" id="zb-detail-log"></pre>
+    </div>
   </div>
 
   <div class="zb-actions">
@@ -1550,6 +1563,41 @@ p.muted { color:#999; font-size:12px; }
   var statusES = null;
   var statusActive = false;        // soll der Status-Stream offen sein?
 
+  // ---- Aktivitäts-Verlauf (auf-/zuklappbares Panel) --------------------------
+  // Sammelt die Detail-Zeilen des Status-Streams (z. B. „Borg-Übertragung … – datei")
+  // client-seitig zu einem scrollbaren Verlauf – so sieht man jederzeit, was gerade
+  // passiert, OHNE das Logfile zu belasten. Nur im Browser, nichts wird gespeichert.
+  var elDetToggle = document.getElementById('zb-detail-toggle');
+  var elDetPanel  = document.getElementById('zb-detail-panel');
+  var elDetLog    = document.getElementById('zb-detail-log');
+  var detHistory  = [];            // gesammelte Zeilen (gedeckelt)
+  var detLastPush = '';            // letzte aufgenommene Zeile (Dedup)
+  function zbDetPush(text){
+    if (!text || text === detLastPush) return;
+    detLastPush = text;
+    var t = new Date().toLocaleTimeString();
+    detHistory.push(t + '  ' + text);
+    if (detHistory.length > 500) detHistory.shift();   // Speicher deckeln
+    if (elDetPanel && !elDetPanel.hidden && elDetLog) {
+      var atBottom = (elDetLog.scrollTop + elDetLog.clientHeight >= elDetLog.scrollHeight - 8);
+      elDetLog.textContent = detHistory.join('\n');
+      if (atBottom) elDetLog.scrollTop = elDetLog.scrollHeight;   // mitlaufen, sofern unten
+    }
+  }
+  if (elDetToggle) {
+    elDetToggle.addEventListener('click', function(ev){
+      ev.preventDefault();
+      if (!elDetPanel) return;
+      var show = elDetPanel.hidden;
+      elDetPanel.hidden = !show;
+      elDetToggle.textContent = (show ? '▾ Aktivität ausblenden' : '▸ Aktivität anzeigen');
+      if (show && elDetLog) {
+        elDetLog.textContent = detHistory.length ? detHistory.join('\n') : 'Noch keine Aktivität.';
+        elDetLog.scrollTop = elDetLog.scrollHeight;
+      }
+    });
+  }
+
   // Lauf erkannt (über den Watch-Stream): Fortschrittsbox zeigen, „Lauf starten"
   // ausblenden, Badge auf „läuft". Greift auch bei extern (Cron/CLI) gestarteten
   // Läufen, ohne dass der Browser pollt.
@@ -1619,6 +1667,7 @@ p.muted { color:#999; font-size:12px; }
       if (s.updated_epoch) lastChange = Math.max(lastChange, s.updated_epoch * 1000);
       var d = s.detail || '';
       if (elDetail && d !== elDetail.textContent) { elDetail.textContent = d; zbBump(); }
+      zbDetPush(d);   // in den Aktivitäts-Verlauf (Panel) aufnehmen
     });
     statusES.addEventListener('done', function(){
       zbStatusStop();

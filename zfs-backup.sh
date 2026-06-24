@@ -6891,7 +6891,7 @@ borg_archive_exists() {
 # Log. Pendant zu transfer_progress_from_pv, nur für borg create.
 borg_create_progress() {
     local total="$1" label="$2" line orig pct last="-1" step msg compact
-    local pmsg pcur ptot ppct plast="-1"
+    local pmsg pcur ptot ppct plast="-1" apath abase lastpath=""
     compact=$(compact_transfer_label "$label")
     while IFS= read -r line; do
         case "$line" in
@@ -6899,17 +6899,21 @@ borg_create_progress() {
                 case "$line" in *'"finished"'*) continue ;; esac
                 orig=$(printf '%s' "$line" | sed -n 's/.*"original_size"[^0-9]*\([0-9][0-9]*\).*/\1/p')
                 case "$orig" in ''|*[!0-9]*) continue ;; esac
-                # Alle ~256 MiB aktualisieren – NICHT je ganzem Prozent: bei TB-
-                # Datasets wären 1 % zig GB (= Minuten ohne sichtbare Bewegung). So
-                # bewegt sich die Anzeige ~alle 2 s. 268435456 = 256 MiB.
-                step=$(( orig / 268435456 ))
-                [ "$step" = "$last" ] && continue
-                last="$step"
+                # Aktuelle Datei (borg liefert sie im path-Feld) mitnehmen – so sieht
+                # man im GUI-Aktivitätsverlauf, was borg gerade verarbeitet.
+                apath=$(printf '%s' "$line" | sed -n 's/.*"path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+                # Aktualisieren, wenn sich die Datei ODER ein 64-MiB-Schritt geändert
+                # hat. borg drosselt archive_progress selbst auf ~5/s -> flüssig bei
+                # vielen Dateien, ohne die Detail-Datei zu fluten. 67108864 = 64 MiB.
+                step=$(( orig / 67108864 ))
+                [ "$step" = "$last" ] && [ "$apath" = "$lastpath" ] && continue
+                last="$step"; lastpath="$apath"
+                abase="${apath##*/}"
                 if [ "$total" -gt 0 ] 2>/dev/null; then
                     pct=$(( orig * 100 / total )); [ "$pct" -gt 100 ] && pct=100
-                    console_stream_status "Borg-Übertragung: ${compact} $(format_bytes "$orig") / $(format_bytes "$total") (${pct}%)"
+                    console_stream_status "Borg-Übertragung: ${compact} $(format_bytes "$orig") / $(format_bytes "$total") (${pct}%)${abase:+ – ${abase}}"
                 else
-                    console_stream_status "Borg-Übertragung: ${compact} $(format_bytes "$orig")"
+                    console_stream_status "Borg-Übertragung: ${compact} $(format_bytes "$orig")${abase:+ – ${abase}}"
                 fi
                 ;;
             *'"progress_percent"'*)

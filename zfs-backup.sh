@@ -6899,15 +6899,16 @@ borg_create_progress() {
                 case "$line" in *'"finished"'*) continue ;; esac
                 orig=$(printf '%s' "$line" | sed -n 's/.*"original_size"[^0-9]*\([0-9][0-9]*\).*/\1/p')
                 case "$orig" in ''|*[!0-9]*) continue ;; esac
+                # Alle ~256 MiB aktualisieren – NICHT je ganzem Prozent: bei TB-
+                # Datasets wären 1 % zig GB (= Minuten ohne sichtbare Bewegung). So
+                # bewegt sich die Anzeige ~alle 2 s. 268435456 = 256 MiB.
+                step=$(( orig / 268435456 ))
+                [ "$step" = "$last" ] && continue
+                last="$step"
                 if [ "$total" -gt 0 ] 2>/dev/null; then
                     pct=$(( orig * 100 / total )); [ "$pct" -gt 100 ] && pct=100
-                    [ "$pct" = "$last" ] && continue
-                    last="$pct"
-                    console_stream_status "Borg-Übertragung: ${compact} ${pct}%"
+                    console_stream_status "Borg-Übertragung: ${compact} $(format_bytes "$orig") / $(format_bytes "$total") (${pct}%)"
                 else
-                    step=$(( orig / 52428800 ))   # je ~50 MiB eine Meldung
-                    [ "$step" = "$last" ] && continue
-                    last="$step"
                     console_stream_status "Borg-Übertragung: ${compact} $(format_bytes "$orig")"
                 fi
                 ;;

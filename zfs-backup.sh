@@ -6891,6 +6891,7 @@ borg_archive_exists() {
 # Log. Pendant zu transfer_progress_from_pv, nur für borg create.
 borg_create_progress() {
     local total="$1" label="$2" line orig pct last="-1" step msg compact
+    local pmsg pcur ptot ppct plast="-1"
     compact=$(compact_transfer_label "$label")
     while IFS= read -r line; do
         case "$line" in
@@ -6909,6 +6910,31 @@ borg_create_progress() {
                     last="$step"
                     console_stream_status "Borg-Übertragung: ${compact} $(format_bytes "$orig")"
                 fi
+                ;;
+            *'"progress_percent"'*)
+                # Phasen mit Prozentanzeige (v. a. „Synchronizing chunks cache" beim
+                # ersten Lauf gegen ein vorbefülltes Repo). borg liefert eine fertig
+                # formatierte message + current/total. Auf ganze % drosseln.
+                case "$line" in *'"finished": true'*|*'"finished":true'*) continue ;; esac
+                pmsg=$(printf '%s' "$line" | sed -n 's/.*"message"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+                pcur=$(printf '%s' "$line" | sed -n 's/.*"current"[^0-9]*\([0-9][0-9]*\).*/\1/p')
+                ptot=$(printf '%s' "$line" | sed -n 's/.*"total"[^0-9]*\([0-9][0-9]*\).*/\1/p')
+                if [ -n "$ptot" ] && [ "$ptot" -gt 0 ] 2>/dev/null; then
+                    ppct=$(( pcur * 100 / ptot )); [ "$ppct" -gt 100 ] && ppct=100
+                    [ "$ppct" = "$plast" ] && continue
+                    plast="$ppct"
+                    if [ -n "$pmsg" ]; then console_stream_status "Borg: ${pmsg}"
+                    else console_stream_status "Borg: Cache wird aufgebaut … ${ppct}%"; fi
+                elif [ -n "$pmsg" ]; then
+                    console_stream_status "Borg: ${pmsg}"
+                fi
+                ;;
+            *'"progress_message"'*)
+                # Einzelne Phasen-Meldungen (z. B. „Saving files cache", „Saving
+                # chunks cache") – selten, daher ohne Drosselung.
+                case "$line" in *'"finished": true'*|*'"finished":true'*) continue ;; esac
+                pmsg=$(printf '%s' "$line" | sed -n 's/.*"message"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+                [ -n "$pmsg" ] && console_stream_status "Borg: ${pmsg}"
                 ;;
             *'"log_message"'*)
                 msg=$(printf '%s' "$line" | sed -n 's/.*"message"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
@@ -7045,7 +7071,12 @@ run_borg_replication() {
         return
     fi
 
-    if ! borg_run info >/dev/null 2>&1; then
+    # Erreichbarkeit/Passphrase per `borg list` prüfen (liest das Manifest) – NICHT
+    # per `borg info`: info würde den Chunks-Cache schon hier synchronisieren (beim
+    # ersten Lauf gegen ein vorbefülltes Repo minutenlang, mit verworfener Ausgabe).
+    # Mit list passiert der Resync stattdessen beim ersten `borg create` und wird
+    # dort dank --log-json/--progress sichtbar (borg_create_progress).
+    if ! borg_run list --format '{archive}{NL}' >/dev/null 2>&1; then
         log "FEHLER: Borg-Repo nicht erreichbar: $BORG_REPO"
         write_state last_error "$(date '+%d.%m.%Y %H:%M:%S') Borg-Repo nicht erreichbar: $BORG_REPO"
         ((BORG_REPLICATION_ERRORS++))

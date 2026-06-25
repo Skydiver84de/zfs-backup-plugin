@@ -829,6 +829,10 @@ p.muted { color:#999; font-size:12px; }
                                    zb_ed_text('SSH_OPTIONS', $bg['ssh_options'] ?? ''));
                   $emd .= zb_ed_md('Compact alle N Läufe', 'COMPACT_EVERY – borg compact gibt Speicher frei (0 = nie).',
                                    zb_ed_num('COMPACT_EVERY', $bg['compact_every'] ?? 0));
+                  $emd .= zb_ed_md('Wiederholungen', 'RETRY_ATTEMPTS – Neuversuche bei (oft transientem) Fehler; borg setzt am Checkpoint fort.',
+                                   zb_ed_num('RETRY_ATTEMPTS', $bg['retry_attempts'] ?? 0));
+                  $emd .= zb_ed_md('Wartezeit (s)', 'RETRY_WAIT_SECONDS – Pause vor jedem Neuversuch (z. B. für DSL-Reconnect).',
+                                   zb_ed_num('RETRY_WAIT_SECONDS', $bg['retry_wait_seconds'] ?? 0));
               } else {
               $emd .= zb_ed_md('Ziel-Dataset', 'BASE_DATASET – Basis-Dataset auf dem Ziel.',
                                zb_ed_text('BASE_DATASET', $t['base_dataset'] ?? ''));

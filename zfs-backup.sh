@@ -89,10 +89,12 @@ BORG_SKIPPED_ARCHIVES=0
 BORG_EXISTING_ARCHIVES="|"
 # Neuversuche je Archiv bei (oft transientem) borg-create-Fehler – z. B.
 # DSL-Zwangstrennung mitten in einem großen Archiv. borg setzt dank Checkpoint am
-# letzten Stand fort, der Neuversuch ist also günstig. Gesamt-Versuche inkl. Erst-
-# versuch; Pause davor lässt die Verbindung wiederkommen.
-BORG_CREATE_RETRIES=3
-BORG_RETRY_DELAY=60
+# letzten Stand fort, der Neuversuch ist also günstig. Semantik wie beim Remote-
+# Ziel: ATTEMPTS = Anzahl Neuversuche NACH dem Erstversuch. Werte kommen aus der
+# Ziel-Config (RETRY_ATTEMPTS/RETRY_WAIT_SECONDS) über load_target_context; hier nur
+# die Fallback-Defaults.
+BORG_RETRY_ATTEMPTS=3
+BORG_RETRY_WAIT_SECONDS=60
 # Repo dieses Laufs erreichbar? (analog REMOTE_READY) – erlaubt das Schreiben des
 # Snapshot-(Archiv-)Caches fürs GUI ohne erneuten Erreichbarkeits-Zwang.
 BORG_READY=0
@@ -673,6 +675,8 @@ TARGETS=(
 # TARGET_borg_PASSPHRASE="geheime-repo-passphrase"
 # TARGET_borg_SSH_OPTIONS="-o BatchMode=yes -o ConnectTimeout=10"
 # TARGET_borg_COMPACT_EVERY=10
+# TARGET_borg_RETRY_ATTEMPTS=3
+# TARGET_borg_RETRY_WAIT_SECONDS=60
 
 ########################################
 # Logs
@@ -872,6 +876,8 @@ target_apply_defaults() {
             target_set "$target_id" PASSPHRASE "$(target_get "$target_id" PASSPHRASE "")"
             target_set "$target_id" SSH_OPTIONS "$(target_get "$target_id" SSH_OPTIONS "-o BatchMode=yes -o ConnectTimeout=10")"
             target_set "$target_id" COMPACT_EVERY "$(target_get "$target_id" COMPACT_EVERY 10)"
+            target_set "$target_id" RETRY_ATTEMPTS "$(target_get "$target_id" RETRY_ATTEMPTS 3)"
+            target_set "$target_id" RETRY_WAIT_SECONDS "$(target_get "$target_id" RETRY_WAIT_SECONDS 60)"
             ;;
     esac
 }
@@ -1180,6 +1186,8 @@ targets_json() {
             printf '"repo":"%s",' "$(json_escape "$(target_get "$target_id" REPO)")"
             printf '"ssh_options":"%s",' "$(json_escape "$(target_get "$target_id" SSH_OPTIONS)")"
             printf '"compact_every":%s,' "$(json_num "$(target_get "$target_id" COMPACT_EVERY 0)")"
+            printf '"retry_attempts":%s,' "$(json_num "$(target_get "$target_id" RETRY_ATTEMPTS 0)")"
+            printf '"retry_wait_seconds":%s,' "$(json_num "$(target_get "$target_id" RETRY_WAIT_SECONDS 0)")"
             # Passphrase nie ausgeben – nur, ob sie gesetzt ist.
             printf '"passphrase_set":%s' "$(json_bool "$([ -n "$(target_get "$target_id" PASSPHRASE)" ] && echo yes || echo no)")"
             printf '}'
@@ -1234,6 +1242,15 @@ load_target_context() {
             BORG_PASSPHRASE_VALUE="$(target_get "$target_id" PASSPHRASE "")"
             BORG_SSH_OPTIONS="$(target_get "$target_id" SSH_OPTIONS "-o BatchMode=yes -o ConnectTimeout=10")"
             BORG_COMPACT_EVERY="$(target_get "$target_id" COMPACT_EVERY 10)"
+            # Neuversuche bei (oft transientem) create-Fehler – gleiche Konfig-Felder
+            # wie beim Remote-Ziel (RETRY_ATTEMPTS = Anzahl Neuversuche, RETRY_WAIT_
+            # SECONDS = Pause davor). Default-Pause höher (60 s) als beim Remote (10 s),
+            # da borg keinen ensure_remote_ready-Wartepunkt hat und so eine DSL-
+            # Zwangstrennung sicher überbrückt. Nicht-numerisch -> Default.
+            BORG_RETRY_ATTEMPTS="$(target_get "$target_id" RETRY_ATTEMPTS 3)"
+            BORG_RETRY_WAIT_SECONDS="$(target_get "$target_id" RETRY_WAIT_SECONDS 60)"
+            case "$BORG_RETRY_ATTEMPTS"     in ''|*[!0-9]*) BORG_RETRY_ATTEMPTS=3 ;; esac
+            case "$BORG_RETRY_WAIT_SECONDS" in ''|*[!0-9]*) BORG_RETRY_WAIT_SECONDS=60 ;; esac
             ;;
         *)
             return 1
@@ -7045,8 +7062,9 @@ replicate_dataset_borg() {
         # Re-Upload, files-cache das Re-Lesen bereits erfasster Dateien).
         # Neuversuch bei Fehler: transiente Aussetzer (z. B. DSL-Zwangstrennung mitten
         # in einem großen Archiv) heilen sich so im selben Lauf – borg resumed am
-        # Checkpoint. _outcome: ok | exists | fail.
-        local _attempt=0 _outcome="fail"
+        # Checkpoint. _retry zählt die Neuversuche NACH dem Erstversuch (Semantik wie
+        # Remote-Ziel). _outcome: ok | exists | fail.
+        local _retry=0 _outcome="fail"
         while :; do
             ( cd "$src" && borg_run create --one-file-system --checkpoint-interval 600 \
                 --log-json --progress "::${archive}" . \
@@ -7057,16 +7075,16 @@ replicate_dataset_borg() {
             if borg_run list --format '{archive}{NL}' 2>/dev/null | grep -qxF "$archive"; then
                 _outcome="exists"; break
             fi
-            _attempt=$((_attempt + 1))
-            [ "$_attempt" -ge "$BORG_CREATE_RETRIES" ] && { _outcome="fail"; break; }
-            log "WARNUNG: Borg create rc=${rc} (${archive}) – Versuch ${_attempt}/$((BORG_CREATE_RETRIES - 1)) fehlgeschlagen, neuer Versuch in ${BORG_RETRY_DELAY}s (borg setzt am Checkpoint fort)"
-            sleep "$BORG_RETRY_DELAY"
+            [ "$_retry" -ge "$BORG_RETRY_ATTEMPTS" ] && { _outcome="fail"; break; }
+            _retry=$((_retry + 1))
+            log "WARNUNG: Borg create rc=${rc} (${archive}) – Neuversuch ${_retry}/${BORG_RETRY_ATTEMPTS} in ${BORG_RETRY_WAIT_SECONDS}s (borg setzt am Checkpoint fort)"
+            sleep "$BORG_RETRY_WAIT_SECONDS"
         done
         borg_src_umount "$mnt"
         case "$_outcome" in
             ok)
                 [ "$rc" -eq 1 ] && log "Borg create Warnung (rc=1, fortgesetzt): ${archive}"
-                [ "$_attempt" -gt 0 ] && log "Borg create nach ${_attempt} Neuversuch(en) erfolgreich: ${archive}"
+                [ "$_retry" -gt 0 ] && log "Borg create nach ${_retry} Neuversuch(en) erfolgreich: ${archive}"
                 BORG_EXISTING_ARCHIVES="${BORG_EXISTING_ARCHIVES}${archive}|"
                 ((BORG_CREATED_ARCHIVES++))
                 # Größe des frisch erstellten Archivs persistent cachen (ändert sich nie).
@@ -7081,7 +7099,7 @@ replicate_dataset_borg() {
                 ((BORG_SKIPPED_ARCHIVES++))
                 ;;
             *)
-                log "FEHLER: Borg create fehlgeschlagen (rc=${rc}) nach ${BORG_CREATE_RETRIES} Versuch(en): ${archive}"
+                log "FEHLER: Borg create fehlgeschlagen (rc=${rc}) nach $((BORG_RETRY_ATTEMPTS + 1)) Versuch(en): ${archive}"
                 write_state last_error "$(date '+%d.%m.%Y %H:%M:%S') Borg create fehlgeschlagen: ${archive}"
                 did_fail=1
                 ;;

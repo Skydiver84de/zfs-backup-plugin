@@ -7018,29 +7018,42 @@ borg_create_progress() {
 # der „Snapshot mit instabilem Namen"-Fall). Ein Bind-Mount auf einen stabilen
 # Pfad lässt den Cache über Snapshots UND Läufe greifen. Echo = stabiler Pfad bei
 # Erfolg; Rückgabe 1 -> Aufrufer liest direkt (korrekt, nur ohne Cache-Vorteil).
+# Hängt einen Bind-Mount robust aus. Bei „target is busy" – etwa wenn ein gerade
+# per Abbruch sterbender borg-Child seinen Checkpoint noch fertig schreibt und den
+# Mount kurz hält – ein paar Neuversuche, dann als letzter Ausweg lazy (umount -l:
+# löst sich, sobald die letzte Referenz weg ist). So bleibt nach --stop KEIN
+# Bind-Mount hängen, der den Snapshot am Löschen hindert. Gibt 0, sobald der Pfad
+# kein Mountpoint mehr ist (auch lazy zählt als Erfolg).
+borg_src_umount() {
+    local mnt="$1" i=0
+    [ -n "$mnt" ] || return 0
+    mountpoint -q "$mnt" 2>/dev/null || return 0
+    while [ "$i" -lt 10 ]; do
+        umount "$mnt" 2>/dev/null
+        mountpoint -q "$mnt" 2>/dev/null || return 0
+        sleep 0.3; i=$((i + 1))
+    done
+    umount -l "$mnt" 2>/dev/null   # lazy: aus dem Baum lösen, Freigabe sobald frei
+}
+
 borg_src_mount() {
     local ds="$1" root="$2" mnt
     mnt="${RUNTIME_DIR}/borg/_src/${ds//\//%}"
     mkdir -p "$mnt" 2>/dev/null || return 1
-    mountpoint -q "$mnt" 2>/dev/null && umount "$mnt" 2>/dev/null   # Rest eines Abbruchs
+    borg_src_umount "$mnt"   # Rest eines Abbruchs robust lösen, bevor neu gebunden wird
     mount --bind "$root" "$mnt" 2>/dev/null || return 1
     printf '%s' "$mnt"
 }
 
-borg_src_umount() {
-    local mnt="$1"
-    [ -n "$mnt" ] || return 0
-    umount "$mnt" 2>/dev/null
-}
-
 # Verwaiste Bind-Mounts unter _src lösen (z. B. nach hartem Abbruch eines Laufs) –
-# damit sie keine Snapshots am Löschen hindern. Vor dem Lauf aufgerufen.
+# damit sie keine Snapshots am Löschen hindern. Vor dem Lauf und beim Abbruch
+# aufgerufen.
 borg_src_cleanup_all() {
     local base="${RUNTIME_DIR}/borg/_src" d
     [ -d "$base" ] || return 0
     for d in "$base"/*; do
         [ -d "$d" ] || continue
-        mountpoint -q "$d" 2>/dev/null && umount "$d" 2>/dev/null
+        borg_src_umount "$d"
     done
 }
 

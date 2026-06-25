@@ -5405,7 +5405,11 @@ local_full_send_all_snapshots() {
                     return 1
                 fi
                 if assert_safe_local_target_dataset "$ds" "$target"; then
-                    zfs destroy -r "$target" >/dev/null 2>&1
+                    # Best-Effort-Aufräumen: schlägt es fehl, bleibt das Teil-Ziel
+                    # bestehen; der nächste Lauf nimmt es per Resume/Neuaufbau auf.
+                    if ! zfs destroy -r "$target" 2> >(log_stderr "ZFS Destroy Aufräumen lokal"); then
+                        log "WARNUNG: Aufräumen nach Full-Send-Abbruch fehlgeschlagen, Ziel bleibt bestehen (nächster Lauf versucht erneut): $target"
+                    fi
                 else
                     log "FEHLER: Unsicheres lokales Ziel-Dataset, Aufräumen nach Full-Send-Abbruch übersprungen: $target"
                 fi
@@ -5433,7 +5437,10 @@ rebuild_local_target_from_all_snapshots() {
         return 1
     fi
 
-    zfs destroy -r "$target" >/dev/null 2>&1 || return 1
+    if ! zfs destroy -r "$target" 2> >(log_stderr "ZFS Destroy Neuaufbau"); then
+        log "FEHLER: Ziel-Dataset konnte für Neuaufbau nicht gelöscht werden: $target"
+        return 1
+    fi
     local_full_send_all_snapshots "$ds" "$target"
 }
 
@@ -6238,7 +6245,11 @@ remote_full_send_all_snapshots() {
             first="no"
             if ! remote_full_send "$ds" "$target" "$name" no; then
                 if assert_safe_remote_target_dataset "$ds" "$target"; then
-                    remote_destroy_dataset_recursive "$target" >/dev/null 2>&1
+                    # Best-Effort-Aufräumen (siehe lokale Replikation): schlägt es
+                    # fehl, bleibt das Teil-Ziel; der nächste Lauf nimmt es auf.
+                    if ! remote_destroy_dataset_recursive "$target"; then
+                        log "WARNUNG: Aufräumen nach Remote-Full-Send-Abbruch fehlgeschlagen, Ziel bleibt bestehen (nächster Lauf versucht erneut): ${REMOTE_HOST}:${target}"
+                    fi
                 else
                     log "FEHLER: Unsicheres Remote Ziel-Dataset, Aufräumen nach Full-Send-Abbruch übersprungen: ${REMOTE_HOST}:${target}"
                 fi

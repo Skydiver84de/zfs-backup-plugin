@@ -6951,7 +6951,11 @@ borg_create_progress() {
     while IFS= read -r line; do
         case "$line" in
             *'"archive_progress"'*)
-                case "$line" in *'"finished"'*) continue ;; esac
+                # borg 1.4 setzt in JEDEM archive_progress-Event "finished": false,
+                # nur das Abschluss-Event hat "finished": true (und KEINE Felder mehr).
+                # Daher NUR das Abschluss-Event überspringen – nicht jede Zeile mit
+                # "finished", sonst fiele der gesamte Übertragungsfortschritt weg.
+                case "$line" in *'"finished": true'*|*'"finished":true'*) continue ;; esac
                 orig=$(printf '%s' "$line" | sed -n 's/.*"original_size"[^0-9]*\([0-9][0-9]*\).*/\1/p')
                 case "$orig" in ''|*[!0-9]*) continue ;; esac
                 # Aktuelle Datei (borg liefert sie im path-Feld) mitnehmen – so sieht

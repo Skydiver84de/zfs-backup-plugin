@@ -827,8 +827,8 @@ p.muted { color:#999; font-size:12px; }
                                    zb_ed_secret('PASSPHRASE', !empty($bg['passphrase_set'])));
                   $emd .= zb_ed_md('SSH-Optionen', 'SSH_OPTIONS – für die borg-SSH-Verbindung (BORG_RSH), z. B. -i /root/.ssh/key -o BatchMode=yes.',
                                    zb_ed_text('SSH_OPTIONS', $bg['ssh_options'] ?? ''));
-                  $emd .= zb_ed_md('Compact alle N Läufe', 'COMPACT_EVERY – borg compact gibt Speicher frei (0 = nie).',
-                                   zb_ed_num('COMPACT_EVERY', $bg['compact_every'] ?? 0));
+                  $emd .= zb_ed_md('Compact alle N Läufe', 'COMPACT_EVERY – borg compact gibt Speicher frei (1 = jeder Lauf, 0 = nie).',
+                                   zb_ed_num('COMPACT_EVERY', $bg['compact_every'] ?? 1));
                   $emd .= zb_ed_md('Wiederholungen', 'RETRY_ATTEMPTS – Neuversuche bei (oft transientem) Fehler; borg setzt am Checkpoint fort.',
                                    zb_ed_num('RETRY_ATTEMPTS', $bg['retry_attempts'] ?? 0));
                   $emd .= zb_ed_md('Wartezeit (s)', 'RETRY_WAIT_SECONDS – Pause vor jedem Neuversuch (z. B. für DSL-Reconnect).',
@@ -909,8 +909,8 @@ p.muted { color:#999; font-size:12px; }
                            '<input type="password" id="add-borg-pass" autocomplete="new-password" placeholder="Repo-Passphrase">');
       $amdBorg .= zb_ed_md('SSH-Optionen', 'Für die borg-SSH-Verbindung (SSH_OPTIONS), z. B. -i /root/.ssh/key -o BatchMode=yes.',
                            '<input type="text" id="add-borg-ssh" placeholder="-i /root/.ssh/zfs_backup_ed25519 -o BatchMode=yes">');
-      $amdBorg .= zb_ed_md('Compact alle N Läufe', 'borg compact gibt Speicher frei (COMPACT_EVERY; 0 = nie).',
-                           '<input type="number" id="add-borg-compact" min="0" step="1" value="10">');
+      $amdBorg .= zb_ed_md('Compact alle N Läufe', 'borg compact gibt Speicher frei (COMPACT_EVERY; 1 = jeder Lauf, 0 = nie).',
+                           '<input type="number" id="add-borg-compact" min="0" step="1" value="1">');
     ?>
     <div id="add-base-row"><?= zb_md($amdBase) ?></div>
     <div id="add-host-row" style="display:none"><?= zb_md($amdHost) ?></div>

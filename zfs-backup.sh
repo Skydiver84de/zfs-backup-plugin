@@ -674,7 +674,7 @@ TARGETS=(
 # TARGET_borg_REPO="ssh://user@host:23/./backups/nas1"
 # TARGET_borg_PASSPHRASE="geheime-repo-passphrase"
 # TARGET_borg_SSH_OPTIONS="-o BatchMode=yes -o ConnectTimeout=10"
-# TARGET_borg_COMPACT_EVERY=10
+# TARGET_borg_COMPACT_EVERY=1
 # TARGET_borg_RETRY_ATTEMPTS=3
 # TARGET_borg_RETRY_WAIT_SECONDS=60
 
@@ -875,7 +875,7 @@ target_apply_defaults() {
             target_set "$target_id" REPO "$(target_get "$target_id" REPO "")"
             target_set "$target_id" PASSPHRASE "$(target_get "$target_id" PASSPHRASE "")"
             target_set "$target_id" SSH_OPTIONS "$(target_get "$target_id" SSH_OPTIONS "-o BatchMode=yes -o ConnectTimeout=10")"
-            target_set "$target_id" COMPACT_EVERY "$(target_get "$target_id" COMPACT_EVERY 10)"
+            target_set "$target_id" COMPACT_EVERY "$(target_get "$target_id" COMPACT_EVERY 1)"
             target_set "$target_id" RETRY_ATTEMPTS "$(target_get "$target_id" RETRY_ATTEMPTS 3)"
             target_set "$target_id" RETRY_WAIT_SECONDS "$(target_get "$target_id" RETRY_WAIT_SECONDS 60)"
             ;;
@@ -1241,7 +1241,7 @@ load_target_context() {
             BORG_REPO="$(target_get "$target_id" REPO "")"
             BORG_PASSPHRASE_VALUE="$(target_get "$target_id" PASSPHRASE "")"
             BORG_SSH_OPTIONS="$(target_get "$target_id" SSH_OPTIONS "-o BatchMode=yes -o ConnectTimeout=10")"
-            BORG_COMPACT_EVERY="$(target_get "$target_id" COMPACT_EVERY 10)"
+            BORG_COMPACT_EVERY="$(target_get "$target_id" COMPACT_EVERY 1)"
             # Neuversuche bei (oft transientem) create-Fehler – gleiche Konfig-Felder
             # wie beim Remote-Ziel (RETRY_ATTEMPTS = Anzahl Neuversuche, RETRY_WAIT_
             # SECONDS = Pause davor). Default-Pause höher (60 s) als beim Remote (10 s),
@@ -7213,11 +7213,11 @@ borg_prune_extra_archives() {
     done < <(printf '%s\n' "${BORG_EXISTING_ARCHIVES}" | tr '|' '\n')
 }
 
-# Gibt Speicher frei (Dedup gibt erst beim Compact frei). Läuft NICHT jeden Lauf,
-# sondern alle COMPACT_EVERY Läufe (Zähler je Ziel im State). 0 = nie.
+# Gibt Speicher frei (Dedup gibt erst beim Compact frei). Läuft alle
+# COMPACT_EVERY Läufe (Zähler je Ziel im State). 1 = jeder Lauf, 0 = nie.
 borg_compact_if_due() {
     local key count every
-    every="${BORG_COMPACT_EVERY:-10}"
+    every="${BORG_COMPACT_EVERY:-1}"
     [ "$every" -gt 0 ] 2>/dev/null || return 0
 
     key="borg_compact_${CURRENT_TARGET_ID}"

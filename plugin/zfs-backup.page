@@ -353,8 +353,9 @@ p.muted { color:#999; font-size:12px; }
 /* Unraid streckt <select> sonst auf volle Breite – schmal halten und neben das
  * Label „Zeilen:" setzen. */
 .zb-actions label { vertical-align:middle; }
-#zb-log-n { margin-right:10px; width:auto !important; display:inline-block;
+#zb-log-date, #zb-log-n { margin-right:10px; width:auto !important; display:inline-block;
             min-width:80px; vertical-align:middle; }
+#zb-log-date { min-width:130px; }
 #zb-log-filter { margin-left:10px; width:auto !important; display:inline-block;
                  min-width:200px; vertical-align:middle; }
 #zb-log-count { margin-left:8px; vertical-align:middle; }

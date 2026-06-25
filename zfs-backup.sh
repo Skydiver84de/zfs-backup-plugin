@@ -87,6 +87,12 @@ BORG_DELETED_ARCHIVES=0
 BORG_CREATED_ARCHIVES=0
 BORG_SKIPPED_ARCHIVES=0
 BORG_EXISTING_ARCHIVES="|"
+# Neuversuche je Archiv bei (oft transientem) borg-create-Fehler – z. B.
+# DSL-Zwangstrennung mitten in einem großen Archiv. borg setzt dank Checkpoint am
+# letzten Stand fort, der Neuversuch ist also günstig. Gesamt-Versuche inkl. Erst-
+# versuch; Pause davor lässt die Verbindung wiederkommen.
+BORG_CREATE_RETRIES=3
+BORG_RETRY_DELAY=60
 # Repo dieses Laufs erreichbar? (analog REMOTE_READY) – erlaubt das Schreiben des
 # Snapshot-(Archiv-)Caches fürs GUI ohne erneuten Erreichbarkeits-Zwang.
 BORG_READY=0
@@ -7035,33 +7041,51 @@ replicate_dataset_borg() {
         # cd in den (stabilen) Snapshot-Root, „." sichern -> Archiv enthält relative Pfade.
         # --checkpoint-interval 600: alle 10 Min einen Checkpoint (statt borg-Default
         # 30 Min). Bei Abbruch/Absturz geht so höchstens ~10 Min verloren; der nächste
-        # Lauf setzt am Checkpoint fort (Dedup spart den Re-Upload, files-cache das
-        # Re-Lesen bereits erfasster Dateien).
-        ( cd "$src" && borg_run create --one-file-system --checkpoint-interval 600 \
-            --log-json --progress "::${archive}" . \
-            2> >(borg_create_progress "$_btotal" "$archive") )
-        rc=$?
-        borg_src_umount "$mnt"
-        if [ "$rc" -eq 0 ] || [ "$rc" -eq 1 ]; then
-            [ "$rc" -eq 1 ] && log "Borg create Warnung (rc=1, fortgesetzt): ${archive}"
-            BORG_EXISTING_ARCHIVES="${BORG_EXISTING_ARCHIVES}${archive}|"
-            ((BORG_CREATED_ARCHIVES++))
-            # Größe des frisch erstellten Archivs persistent cachen (ändert sich nie).
-            if _bsz=$(borg_fetch_archive_size "$archive"); then
-                IFS=$'\t' read -r _bo _bd <<< "$_bsz"
-                borg_size_store "$CURRENT_TARGET_ID" "$archive" "$_bo" "$_bd"
+        # Lauf (oder der Neuversuch unten) setzt am Checkpoint fort (Dedup spart den
+        # Re-Upload, files-cache das Re-Lesen bereits erfasster Dateien).
+        # Neuversuch bei Fehler: transiente Aussetzer (z. B. DSL-Zwangstrennung mitten
+        # in einem großen Archiv) heilen sich so im selben Lauf – borg resumed am
+        # Checkpoint. _outcome: ok | exists | fail.
+        local _attempt=0 _outcome="fail"
+        while :; do
+            ( cd "$src" && borg_run create --one-file-system --checkpoint-interval 600 \
+                --log-json --progress "::${archive}" . \
+                2> >(borg_create_progress "$_btotal" "$archive") )
+            rc=$?
+            if [ "$rc" -eq 0 ] || [ "$rc" -eq 1 ]; then _outcome="ok"; break; fi
+            # Schon vorhanden (z. B. „already exists", rc=2): kein Fehler, nicht erneut.
+            if borg_run list --format '{archive}{NL}' 2>/dev/null | grep -qxF "$archive"; then
+                _outcome="exists"; break
             fi
-        elif borg_run list --format '{archive}{NL}' 2>/dev/null | grep -qxF "$archive"; then
-            # Archiv existiert bereits (z. B. „already exists", rc=2): kein Fehler,
-            # nur die Vorab-Liste war unvollständig. Übernehmen, nicht blockieren.
-            log "Borg create: Archiv bereits vorhanden, übersprungen: ${archive}"
-            BORG_EXISTING_ARCHIVES="${BORG_EXISTING_ARCHIVES}${archive}|"
-            ((BORG_SKIPPED_ARCHIVES++))
-        else
-            log "FEHLER: Borg create fehlgeschlagen (rc=${rc}): ${archive}"
-            write_state last_error "$(date '+%d.%m.%Y %H:%M:%S') Borg create fehlgeschlagen: ${archive}"
-            did_fail=1
-        fi
+            _attempt=$((_attempt + 1))
+            [ "$_attempt" -ge "$BORG_CREATE_RETRIES" ] && { _outcome="fail"; break; }
+            log "WARNUNG: Borg create rc=${rc} (${archive}) – Versuch ${_attempt}/$((BORG_CREATE_RETRIES - 1)) fehlgeschlagen, neuer Versuch in ${BORG_RETRY_DELAY}s (borg setzt am Checkpoint fort)"
+            sleep "$BORG_RETRY_DELAY"
+        done
+        borg_src_umount "$mnt"
+        case "$_outcome" in
+            ok)
+                [ "$rc" -eq 1 ] && log "Borg create Warnung (rc=1, fortgesetzt): ${archive}"
+                [ "$_attempt" -gt 0 ] && log "Borg create nach ${_attempt} Neuversuch(en) erfolgreich: ${archive}"
+                BORG_EXISTING_ARCHIVES="${BORG_EXISTING_ARCHIVES}${archive}|"
+                ((BORG_CREATED_ARCHIVES++))
+                # Größe des frisch erstellten Archivs persistent cachen (ändert sich nie).
+                if _bsz=$(borg_fetch_archive_size "$archive"); then
+                    IFS=$'\t' read -r _bo _bd <<< "$_bsz"
+                    borg_size_store "$CURRENT_TARGET_ID" "$archive" "$_bo" "$_bd"
+                fi
+                ;;
+            exists)
+                log "Borg create: Archiv bereits vorhanden, übersprungen: ${archive}"
+                BORG_EXISTING_ARCHIVES="${BORG_EXISTING_ARCHIVES}${archive}|"
+                ((BORG_SKIPPED_ARCHIVES++))
+                ;;
+            *)
+                log "FEHLER: Borg create fehlgeschlagen (rc=${rc}) nach ${BORG_CREATE_RETRIES} Versuch(en): ${archive}"
+                write_state last_error "$(date '+%d.%m.%Y %H:%M:%S') Borg create fehlgeschlagen: ${archive}"
+                did_fail=1
+                ;;
+        esac
     done < <(list_backup_snapshots "$ds")
 
     if [ "$did_fail" -eq 1 ]; then

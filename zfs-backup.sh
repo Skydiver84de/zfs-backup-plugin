@@ -44,7 +44,6 @@ readonly DATASET_STATE_DIR="${STATE_DIR}/datasets"
 
 LOCK_FILE="${LOCK_DIR}/zfs-backup.pid"
 
-SIMULATE=0
 RUN_ERRORS=0
 CREATED_HOURLY=0
 CREATED_DAILY=0
@@ -73,12 +72,10 @@ CONFIG_CREATED=0
 CONFIG_UPDATED=0
 CONFIG_ADDED_OPTIONS=()
 RUN_ACTIVE=0
-RUN_INTERRUPTED=0
 SELF_DATASETS=()
 SELF_DATASETS_COMPUTED=0
 VERBOSE=0
 CONSOLE_STATUS_ACTIVE=0
-RUN_RUNTIME_SECONDS=0
 REMOTE_SSH_ARGS=()
 LOCAL_REPLICATION_FAILED_DATASETS="|"
 REMOTE_REPLICATION_FAILED_DATASETS="|"
@@ -1694,7 +1691,6 @@ release_lock() {
 # (verwaiste Bind-Mounts lösen, Lock/Progress entfernen) + Statusvermerk.
 on_interrupt() {
     trap '' INT TERM    # weitere Signale während des Aufräumens ignorieren
-    RUN_INTERRUPTED=1
     log "Snapshotlauf abgebrochen (Signal empfangen)"
     write_state last_error "$(date '+%d.%m.%Y %H:%M:%S') Lauf abgebrochen"
     borg_src_cleanup_all 2>/dev/null
@@ -9597,8 +9593,6 @@ show_run_summary() {
     local remote_inv_m=0
     local remote_inv_y=0
     local remote_inv_total=0
-
-    RUN_RUNTIME_SECONDS="$runtime"
 
     [ "$RUN_ERRORS" -gt 0 ] && result="FEHLER"
     datasets=$(read_state datasets_count)

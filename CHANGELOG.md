@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026.06.25.r01 – Borg-Offsite-Backup
+
+- **Neuer Zieltyp Borg:** Backups lassen sich jetzt zusätzlich in ein entferntes
+  Borg-Repository spiegeln – etwa auf eine Hetzner Storage Box – verschlüsselt,
+  dedupliziert und komprimiert. Mit Anbieter-Vorlagen für die Einrichtung,
+  Datei-Browser samt Einzeldatei-Restore, Verify, Kapazitätsanzeige (frei und
+  belegt) und automatischem Speicherfreigeben.
+- **Robuste Übertragung:** unveränderte Dateien werden über Läufe hinweg nicht
+  erneut gelesen, unterbrochene Übertragungen setzen am letzten Checkpoint fort,
+  und transiente Aussetzer wie eine DSL-Zwangstrennung heilen sich per
+  automatischem Neuversuch – mit denselben Einstellungen wie bei Remote-Zielen.
+- **Lauf abbrechen:** ein laufender Backup-Lauf lässt sich jederzeit sauber
+  stoppen, per Button in der GUI oder über die Kommandozeile.
+- **Aktivitäts-Verlauf auf der Statusseite:** ein auf- und zuklappbares Panel zeigt
+  Schritt für Schritt, was gerade läuft, und übersteht Tab-Wechsel und Neuladen.
+- **Logbuch:** das angezeigte Tageslog ist auswählbar – heute live oder ältere
+  Tage –, und jeder Schritt jedes Datasets und Archivs wird einheitlich
+  protokolliert, durchgängig nachvollziehbar.
+- **Mehr Sicherheit:** aus dem Sicherungsumfang gefallene Datasets werden nicht
+  mehr automatisch gelöscht, sondern nur als verwaist gemeldet; fehlgeschlagene
+  Aufräumschritte werden protokolliert statt still verschluckt.
+- **Benachrichtigungen** schließen jetzt auch die Borg-Ziele ein.
+
 ## 2026.06.20.r01 – Seeding, sortierbare Ziele, frische Ausdünn-Anker
 
 - **Snapshot-Seeding** legt wöchentliche, monatliche und jährliche Snapshots an,

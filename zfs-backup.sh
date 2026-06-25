@@ -251,7 +251,9 @@ log() {
 console_stream_status() {
     local msg="$1"
 
-    write_progress_detail "$msg"    # auch headless: Übertragungs-% für die GUI
+    # $2="tick" reicht write_progress_detail durch: hochfrequente Übertragungs-%
+    # aktualisieren nur die Live-Detailzeile, nicht die Aktivitäts-Historie.
+    write_progress_detail "$msg" "${2:-}"
 
     # /dev/tty hat mode 0666, daher ist `[ -w /dev/tty ]` auch ohne Controlling-
     # Terminal wahr – das ÖFFNEN scheitert dann aber mit ENXIO ("No such device").
@@ -368,9 +370,9 @@ transfer_progress_from_pv() {
         bar_todo=${bar_todo// / }
 
         if [ -n "$size" ]; then
-            console_stream_status "Übertragung: ${compact_label} ${percent_int}% [${bar_done}${bar_todo}] $(format_bytes "$size")"
+            console_stream_status "Übertragung: ${compact_label} ${percent_int}% [${bar_done}${bar_todo}] $(format_bytes "$size")" tick
         else
-            console_stream_status "Übertragung: ${compact_label} ${percent_int}% [${bar_done}${bar_todo}]"
+            console_stream_status "Übertragung: ${compact_label} ${percent_int}% [${bar_done}${bar_todo}]" tick
         fi
 
         if [ "$stream_milestones" = 1 ]; then
@@ -1756,7 +1758,12 @@ write_progress() {
 # bisherigen Verlauf des Laufs zeigen kann – NICHT im Log (das wollten wir nicht).
 write_progress_detail() {
     [ "${RUN_ACTIVE:-0}" -eq 1 ] || return 0
-    if [ -n "$1" ] && [ "$1" != "$PROGRESS_DETAIL" ]; then
+    # $2 gesetzt = hochfrequenter Übertragungs-Tick (borg-%/pv-%): aktualisiert nur
+    # die Live-Detailzeile, kommt aber NICHT in die Aktivitäts-Historie – sonst
+    # verdrängen Tausende Byte-Ticks die eigentlichen Schritt-Einträge (Snapshots,
+    # Replikation [x/24], „Saving files cache"). Der Live-Fortschritt steht ohnehin
+    # in der Detailzeile.
+    if [ -z "${2:-}" ] && [ -n "$1" ] && [ "$1" != "$PROGRESS_DETAIL" ]; then
         append_progress_activity "$1"
     fi
     PROGRESS_DETAIL="$1"
@@ -6975,9 +6982,9 @@ borg_create_progress() {
                 abase="${apath##*/}"
                 if [ "$total" -gt 0 ] 2>/dev/null; then
                     pct=$(( orig * 100 / total )); [ "$pct" -gt 100 ] && pct=100
-                    console_stream_status "Borg-Übertragung: ${compact} $(format_bytes "$orig") / $(format_bytes "$total") (${pct}%)${abase:+ – ${abase}}"
+                    console_stream_status "Borg-Übertragung: ${compact} $(format_bytes "$orig") / $(format_bytes "$total") (${pct}%)${abase:+ – ${abase}}" tick
                 else
-                    console_stream_status "Borg-Übertragung: ${compact} $(format_bytes "$orig")${abase:+ – ${abase}}"
+                    console_stream_status "Borg-Übertragung: ${compact} $(format_bytes "$orig")${abase:+ – ${abase}}" tick
                 fi
                 ;;
             *'"progress_percent"'*)

@@ -1615,12 +1615,27 @@ p.muted { color:#999; font-size:12px; }
   var elDetLog    = document.getElementById('zb-detail-log');
   var detHistory  = [];            // gesammelte Zeilen (gedeckelt)
   var detLastPush = '';            // letzte aufgenommene Zeile (Dedup)
+  var detLastSig  = '';            // „Signatur" der letzten Zeile (Zahlen/Größen entfernt)
+  // Signatur = Text ohne Zahlen/Größen/%: aufeinanderfolgende Übertragungs-Ticks
+  // („… 213.1 GiB …", „… 213.2 GiB …") haben dieselbe Signatur und werden zu EINER
+  // sich aktualisierenden Zeile zusammengefasst, statt das Panel zu fluten. Echte
+  // Schritt-Wechsel (andere Signatur) bleiben eigene Einträge.
+  function zbDetSig(s){
+    return s.replace(/[0-9][0-9.,]*\s?(TiB|GiB|MiB|KiB|B)\b/g,'')
+            .replace(/\d+%/g,'').replace(/\[\d+\/\d+\]/g,'').replace(/\d+/g,'');
+  }
   function zbDetPush(text){
     if (!text || text === detLastPush) return;
     detLastPush = text;
-    var t = new Date().toLocaleTimeString();
-    detHistory.push(t + '  ' + text);
-    if (detHistory.length > 500) detHistory.shift();   // Speicher deckeln
+    var sig = zbDetSig(text);
+    var entry = new Date().toLocaleTimeString() + '  ' + text;
+    if (detHistory.length && sig === detLastSig) {
+      detHistory[detHistory.length - 1] = entry;   // gleiche Art -> letzte Zeile aktualisieren
+    } else {
+      detHistory.push(entry);
+      if (detHistory.length > 500) detHistory.shift();   // Speicher deckeln
+    }
+    detLastSig = sig;
     if (elDetPanel && !elDetPanel.hidden && elDetLog) {
       var atBottom = (elDetLog.scrollTop + elDetLog.clientHeight >= elDetLog.scrollHeight - 8);
       elDetLog.textContent = detHistory.join('\n');
@@ -1708,6 +1723,7 @@ p.muted { color:#999; font-size:12px; }
       // Dedup gegen die gleich folgende Live-Detailzeile: letzten Detailtext merken
       // (Format „HH:MM:SS  <detail>" -> ab Position 10 steht der reine Detailtext).
       detLastPush = lines[lines.length - 1].slice(10);
+      detLastSig  = zbDetSig(detLastPush);   // Live-Tick danach ggf. mit letzter Zeile kollabieren
       if (elDetPanel && !elDetPanel.hidden && elDetLog) {
         elDetLog.textContent = detHistory.join('\n');
         elDetLog.scrollTop = elDetLog.scrollHeight;

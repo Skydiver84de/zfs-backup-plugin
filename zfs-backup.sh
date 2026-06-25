@@ -7030,10 +7030,10 @@ borg_create_progress() {
                 ;;
             *'"log_message"'*)
                 msg=$(printf '%s' "$line" | sed -n 's/.*"message"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-                [ -n "$msg" ] && log "Borg create ${label}: ${msg}"
+                [ -n "$msg" ] && log "Borg-Replikation ${label}: ${msg}"
                 ;;
             *'"type"'*) : ;;   # andere strukturierte Events ignorieren
-            *) [ -n "$line" ] && log "Borg create ${label}: ${line}" ;;
+            *) [ -n "$line" ] && log "Borg-Replikation ${label}: ${line}" ;;
         esac
     done
 }
@@ -7098,7 +7098,10 @@ replicate_dataset_borg() {
         name="${snap#*@}"
         [ -n "$name" ] || continue
         archive="$(borg_archive_name "$ds" "$name")"
-        if borg_archive_exists "$archive"; then ((BORG_SKIPPED_ARCHIVES++)); continue; fi
+        if borg_archive_exists "$archive"; then
+            log "Borg-Replikation übersprungen, Archiv bereits vorhanden: ${ds}@${name}"
+            ((BORG_SKIPPED_ARCHIVES++)); continue
+        fi
 
         root="$(local_snapshot_root "$ds" "$name")" || {
             log "FEHLER: Borg-Quelle nicht browsebar (Mountpoint none/legacy): ${ds}@${name}"
@@ -7113,7 +7116,7 @@ replicate_dataset_borg() {
             continue
         fi
 
-        log "Borg create: ${ds}@${name} -> ${BORG_REPO}::${archive}"
+        log "Borg-Replikation erstellt: ${ds}@${name} -> ${BORG_REPO}::${archive}"
         # Fortschritt: referenzierte Snapshot-Größe als Gesamtwert (schnell, aus
         # ZFS-Metadaten – kein Datei-Walk). --log-json --progress lässt borg den
         # Fortschritt strukturiert auf stderr melden -> borg_create_progress.
@@ -7145,14 +7148,14 @@ replicate_dataset_borg() {
             fi
             [ "$_retry" -ge "$BORG_RETRY_ATTEMPTS" ] && { _outcome="fail"; break; }
             _retry=$((_retry + 1))
-            log "WARNUNG: Borg create rc=${rc} (${archive}) – Neuversuch ${_retry}/${BORG_RETRY_ATTEMPTS} in ${BORG_RETRY_WAIT_SECONDS}s (borg setzt am Checkpoint fort)"
+            log "WARNUNG: Borg-Replikation rc=${rc} (${archive}) – Neuversuch ${_retry}/${BORG_RETRY_ATTEMPTS} in ${BORG_RETRY_WAIT_SECONDS}s (borg setzt am Checkpoint fort)"
             sleep "$BORG_RETRY_WAIT_SECONDS"
         done
         borg_src_umount "$mnt"
         case "$_outcome" in
             ok)
-                [ "$rc" -eq 1 ] && log "Borg create Warnung (rc=1, fortgesetzt): ${archive}"
-                [ "$_retry" -gt 0 ] && log "Borg create nach ${_retry} Neuversuch(en) erfolgreich: ${archive}"
+                [ "$rc" -eq 1 ] && log "Borg-Replikation Warnung (rc=1, fortgesetzt): ${archive}"
+                [ "$_retry" -gt 0 ] && log "Borg-Replikation nach ${_retry} Neuversuch(en) erfolgreich: ${archive}"
                 BORG_EXISTING_ARCHIVES="${BORG_EXISTING_ARCHIVES}${archive}|"
                 ((BORG_CREATED_ARCHIVES++))
                 # Größe des frisch erstellten Archivs persistent cachen (ändert sich nie).
@@ -7162,13 +7165,13 @@ replicate_dataset_borg() {
                 fi
                 ;;
             exists)
-                log "Borg create: Archiv bereits vorhanden, übersprungen: ${archive}"
+                log "Borg-Replikation übersprungen, Archiv bereits vorhanden: ${archive}"
                 BORG_EXISTING_ARCHIVES="${BORG_EXISTING_ARCHIVES}${archive}|"
                 ((BORG_SKIPPED_ARCHIVES++))
                 ;;
             *)
-                log "FEHLER: Borg create fehlgeschlagen (rc=${rc}) nach $((BORG_RETRY_ATTEMPTS + 1)) Versuch(en): ${archive}"
-                write_state last_error "$(date '+%d.%m.%Y %H:%M:%S') Borg create fehlgeschlagen: ${archive}"
+                log "FEHLER: Borg-Replikation fehlgeschlagen (rc=${rc}) nach $((BORG_RETRY_ATTEMPTS + 1)) Versuch(en): ${archive}"
+                write_state last_error "$(date '+%d.%m.%Y %H:%M:%S') Borg-Replikation fehlgeschlagen: ${archive}"
                 did_fail=1
                 ;;
         esac
@@ -8699,7 +8702,9 @@ handle_cli() {
                             "$phase" "$detail" "$started" "$updated" "$updated_epoch" "$pid"
                         last="$key"
                     fi
-                    sleep 0.3
+                    # 0,1 s: bei schnellen Läufen werden weniger Zwischenschritte
+                    # verschluckt (Datei ist winzig -> Polling billig).
+                    sleep 0.1
                 done
             } 2>/dev/null
             exit 0

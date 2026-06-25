@@ -4600,7 +4600,7 @@ snapshot_cache_summary() {
     [ -f "$cache" ] || return 0
     awk -v prefix="$SNAPSHOT_PREFIX" -F'\t' '
         {
-            name=$1; used=$2+0; refer=$3+0
+            name=$1; used=$2+0; refer=$3+0; ts=$4+0
             at=index(name,"@"); if(at==0) next
             ds=substr(name,1,at-1); rest=substr(name,at+1)
             pl=length(prefix); if(substr(rest,1,pl)!=prefix) next
@@ -4612,12 +4612,16 @@ snapshot_cache_summary() {
             else if (t ~ /^monthly_/) m[ds]++
             else if (t ~ /^yearly_/)  y[ds]++
             u[ds]+=used; r[ds]+=refer
+            # Original (referenced) des NEUESTEN Snapshots je Dataset merken – für
+            # borg die einzig sinnvolle Datasetgröße (logische Größe des aktuellen
+            # Stands; Dedup-pro-Archiv ist relativ/instabil, refer-Summe überzählt).
+            if (ts >= mts[ds]) { mts[ds]=ts; lr[ds]=refer }
         }
         END{
             for(i=1;i<=n;i++){ ds=order[i]
-                printf "%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n", ds,
+                printf "%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n", ds,
                     h[ds]+0,d[ds]+0,w[ds]+0,m[ds]+0,y[ds]+0,
-                    h[ds]+d[ds]+w[ds]+m[ds]+y[ds]+0, u[ds]+0, r[ds]+0 }
+                    h[ds]+d[ds]+w[ds]+m[ds]+y[ds]+0, u[ds]+0, r[ds]+0, lr[ds]+0 }
         }
     ' "$cache" 2>/dev/null
 }
@@ -4627,16 +4631,17 @@ snapshot_cache_summary() {
 # kein Live-zfs/SSH. $1 id, $2 label, $3 kind, $4 cache, $5 mapper.
 scope_json() {
     local id="$1" label="$2" kind="$3" cache="$4" mapper="$5"
-    local ds tds dh dd dw dm dy dt du _refer first=1
+    local ds tds dh dd dw dm dy dt du _refer dlatest first=1
     local th=0 td=0 tw=0 tm=0 ty=0 tt=0 tu=0
-    local -A H=() D=() W=() M=() Y=() T=() U=()
+    local -A H=() D=() W=() M=() Y=() T=() U=() LR=()
 
-    # snapshot_cache_summary liefert je Dataset 9 Felder; refer_sum (Feld 9) wird
-    # bewusst NICHT aggregiert (referenced-Summe überzählt geteilte Daten).
-    while IFS=$'\t' read -r tds dh dd dw dm dy dt du _refer; do
+    # snapshot_cache_summary liefert je Dataset 10 Felder; refer_sum (Feld 9) wird
+    # bewusst NICHT aggregiert (referenced-Summe überzählt geteilte Daten). Feld 10
+    # = Original des NEUESTEN Snapshots (für borg die sinnvolle Datasetgröße).
+    while IFS=$'\t' read -r tds dh dd dw dm dy dt du _refer dlatest; do
         [ -n "$tds" ] || continue
         H[$tds]=$dh; D[$tds]=$dd; W[$tds]=$dw; M[$tds]=$dm; Y[$tds]=$dy
-        T[$tds]=$dt; U[$tds]=$du
+        T[$tds]=$dt; U[$tds]=$du; LR[$tds]=$dlatest
     done < <(snapshot_cache_summary "$cache")
 
     printf '{"id":"%s","label":"%s","kind":"%s","datasets":[' \
@@ -4647,12 +4652,16 @@ scope_json() {
         tds=$(map_dataset "$mapper" "$ds")
         dh=${H[$tds]:-0}; dd=${D[$tds]:-0}; dw=${W[$tds]:-0}
         dm=${M[$tds]:-0}; dy=${Y[$tds]:-0}; dt=${T[$tds]:-0}
-        du=${U[$tds]:-0}
+        # Datasetgröße: ZFS = Summe des exklusiv belegten Platzes (used). borg =
+        # Original des neuesten Snapshots (logische Größe des aktuellen Stands) –
+        # die Dedup-pro-Archiv-Größe ist relativ/instabil (0 B, sobald die Daten
+        # mit anderen Archiven geteilt sind), die refer-Summe überzählt.
+        if [ "$kind" = "borg" ]; then du=${LR[$tds]:-0}; else du=${U[$tds]:-0}; fi
         th=$((th+dh)); td=$((td+dd)); tw=$((tw+dw)); tm=$((tm+dm)); ty=$((ty+dy))
         tt=$((tt+dt)); tu=$((tu+du))
         [ "$first" -eq 1 ] && first=0 || printf ','
-        # "used" = Summe des exklusiv belegten Platzes der Snapshots (aussage-
-        # kräftig). KEIN referenced-Summe – das überzählt (Snapshots teilen Daten).
+        # "used": ZFS = exklusiv belegter Platz; borg = logische Größe (neuestes
+        # Original). KEIN referenced-Summe – das überzählt (Snapshots teilen Daten).
         printf '{"dataset":"%s","source":"%s","hourly":%s,"daily":%s,"weekly":%s,"monthly":%s,"yearly":%s,"total":%s,"used":%s}' \
             "$(json_escape "$tds")" "$(json_escape "$ds")" \
             "$(json_num "$dh")" "$(json_num "$dd")" "$(json_num "$dw")" \

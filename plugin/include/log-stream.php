@@ -104,6 +104,12 @@ function emit_progress_line(string $line): void {
 if ($mode === 'status') {
     list($running, $st) = read_status($cli);
     if ($running) {
+        // Bisherige Aktivitäts-Historie des Laufs zuerst senden, damit die GUI-
+        // Aktivitätsanzeige nach Tab-Wechsel/Reload den kompletten Verlauf zeigt
+        // (nicht nur ab jetzt). Eine Zeile je Eintrag, im activity-Event vereint.
+        $act = [];
+        exec(escapeshellarg($cli) . ' --progress-activity 2>/dev/null', $act);
+        if (!empty($act)) { sse('activity', implode("\n", $act)); }
         emit_status($st);
     } elseif (!$expect_starting) {
         // Kein Lauf aktiv und wir warten nicht auf einen Start (Reconnect z. B.

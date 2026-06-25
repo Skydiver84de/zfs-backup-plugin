@@ -68,6 +68,7 @@ REMOTE_READY=0
 REMOTE_READY_HOST=""
 PROGRESS_PHASE=""
 PROGRESS_DETAIL=""
+PROGRESS_ACTIVITY_N=0      # Zähler fürs gelegentliche Kürzen der Aktivitäts-Historie
 CONFIG_CREATED=0
 CONFIG_UPDATED=0
 CONFIG_ADDED_OPTIONS=()
@@ -1682,6 +1683,7 @@ release_lock() {
 
     rm -f "$LOCK_FILE"
     rm -f "${STATE_DIR}/run_progress"
+    rm -f "${STATE_DIR}/run_activity"
 }
 
 # SIGINT/SIGTERM während eines Laufs (GUI „Lauf abbrechen" bzw. `--stop`): sauber
@@ -1749,10 +1751,31 @@ write_progress() {
 }
 
 # Aktualisiert nur das DETAIL (aktueller Unterschritt) unter der laufenden Phase.
+# Jede ECHTE Änderung wird zusätzlich an die Aktivitäts-Historie des Laufs gehängt
+# (state/run_activity), damit die GUI-Aktivitätsanzeige nach Tab-Wechsel/Reload den
+# bisherigen Verlauf des Laufs zeigen kann – NICHT im Log (das wollten wir nicht).
 write_progress_detail() {
     [ "${RUN_ACTIVE:-0}" -eq 1 ] || return 0
+    if [ -n "$1" ] && [ "$1" != "$PROGRESS_DETAIL" ]; then
+        append_progress_activity "$1"
+    fi
     PROGRESS_DETAIL="$1"
     _write_progress_file
+}
+
+# Hängt eine Detail-Zeile (mit Uhrzeit) an die Aktivitäts-Historie des Laufs an und
+# kürzt sie gelegentlich auf die letzten 500 Zeilen (gleicher Deckel wie die GUI).
+# Format „HH:MM:SS  <detail>" deckungsgleich mit der client-seitigen Live-Anzeige.
+append_progress_activity() {
+    local f="${STATE_DIR}/run_activity"
+    printf '%s  %s\n' "$(date '+%H:%M:%S')" "$1" >> "$f" 2>/dev/null || return 0
+    PROGRESS_ACTIVITY_N=$((PROGRESS_ACTIVITY_N + 1))
+    if [ "$PROGRESS_ACTIVITY_N" -ge 50 ]; then
+        PROGRESS_ACTIVITY_N=0
+        if [ "$(wc -l < "$f" 2>/dev/null || echo 0)" -gt 500 ]; then
+            tail -n 500 "$f" > "$f.tmp" 2>/dev/null && mv "$f.tmp" "$f" 2>/dev/null
+        fi
+    fi
 }
 
 _write_progress_file() {
@@ -8247,6 +8270,11 @@ Verwendung:
       Endet, wenn kein Lauf mehr aktiv ist. Quelle für die Live-Detail-
       anzeige der GUI (Push).
 
+  zfs-backup.sh --progress-activity
+      Aktivitäts-Historie des laufenden Laufs ausgeben (je Zeile
+      „HH:MM:SS  <Detail>"). Damit füllt die GUI-Aktivitätsanzeige nach
+      Tab-Wechsel/Reload den bisherigen Verlauf des Laufs (nicht aus dem Log).
+
   zfs-backup.sh --config-check
       Konfiguration prüfen
 
@@ -8554,6 +8582,15 @@ handle_cli() {
             ls -1 "$LOG_DIR"/zfs-backup-*.log 2>/dev/null \
                 | sed -n 's#.*/zfs-backup-\([0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\)\.log$#\1#p' \
                 | sort -r
+            exit 0
+            ;;
+
+        --progress-activity)
+
+            # Aktivitäts-Historie des laufenden Laufs (state/run_activity), je Zeile
+            # „HH:MM:SS  <detail>". Quelle für die GUI-Aktivitätsanzeige, damit diese
+            # nach Tab-Wechsel/Reload den bisherigen Verlauf zeigt (nicht aus dem Log).
+            [ -f "${STATE_DIR}/run_activity" ] && cat "${STATE_DIR}/run_activity"
             exit 0
             ;;
 
@@ -9667,7 +9704,7 @@ fi
 # Befehlen, die das brauchen (Lauf/Pflege/Schreiben). Reine Lese-Befehle, die die
 # GUI beim Seitenaufbau mehrfach aufruft, überspringen das (Performance).
 case "$1" in
-    --version|--help|--status|--gui-init|--capacity|--datasets|--snapshots|--snapshot-tree|--refresh-snapshots|--dataset-snapshots|--snapshot-ls|--snapshot-cat|--targets|--config-schema|--borg-providers|--get-config|--log-tail|--log-list|--log-follow|--progress-follow|--check-stale|--stop)
+    --version|--help|--status|--gui-init|--capacity|--datasets|--snapshots|--snapshot-tree|--refresh-snapshots|--dataset-snapshots|--snapshot-ls|--snapshot-cat|--targets|--config-schema|--borg-providers|--get-config|--log-tail|--log-list|--log-follow|--progress-follow|--progress-activity|--check-stale|--stop)
         ;;
     *)
         config_maintain
@@ -9678,7 +9715,7 @@ esac
 # wird blockiert, bis die Config geprüft wurde.
 if [ "$CONFIG_UPDATED" -eq 1 ]; then
     case "$1" in
-        --help|--version|--status|--gui-init|--check-stale|--capacity|--datasets|--snapshots|--targets|--dataset-snapshots|--snapshot-tree|--refresh-snapshots|--snapshot-ls|--snapshot-cat|--snapshot-restore|--log-tail|--log-list|--log-follow|--progress-follow|--config-check|--config-schema|--borg-providers|--borg-archives|--borg-check-update|--get-config|--set-config|--add-target|--delete-target|--edit-target|--test-target|--reorder-targets|--move-target|--reset-statistics|--reset-run-status|--delete-logs|--thin-history|--delete-managed-snapshots|--cleanup-orphans|--stop)
+        --help|--version|--status|--gui-init|--check-stale|--capacity|--datasets|--snapshots|--targets|--dataset-snapshots|--snapshot-tree|--refresh-snapshots|--snapshot-ls|--snapshot-cat|--snapshot-restore|--log-tail|--log-list|--log-follow|--progress-follow|--progress-activity|--config-check|--config-schema|--borg-providers|--borg-archives|--borg-check-update|--get-config|--set-config|--add-target|--delete-target|--edit-target|--test-target|--reorder-targets|--move-target|--reset-statistics|--reset-run-status|--delete-logs|--thin-history|--delete-managed-snapshots|--cleanup-orphans|--stop)
             ;;
         *)
             echo
@@ -9705,6 +9742,7 @@ acquire_lock
 trap on_interrupt INT TERM
 trap release_lock EXIT
 RUN_ACTIVE=1
+: > "${STATE_DIR}/run_activity" 2>/dev/null   # Aktivitäts-Historie des neuen Laufs leeren
 START_TIME=$(date +%s)
 RUN_STARTED_HUMAN="$(date '+%d.%m.%Y %H:%M:%S')"
 write_progress "Start"

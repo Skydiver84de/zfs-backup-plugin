@@ -1698,6 +1698,21 @@ p.muted { color:#999; font-size:12px; }
       // Logzeile kommt sofort (Push, eigener tail-Kanal).
       if (elLog && ev.data !== elLog.textContent) { elLog.textContent = ev.data; zbBump(); }
     });
+    // Aktivitäts-Historie des Laufs (server-seitig gesammelt) – kommt bei jedem
+    // (Re-)Connect zuerst. Seedt den lokalen Verlauf, damit nach Tab-Wechsel/Reload
+    // der KOMPLETTE bisherige Verlauf dieses Laufs steht (nicht erst ab jetzt).
+    statusES.addEventListener('activity', function(ev){
+      var lines = (ev.data || '').split('\n').filter(function(x){ return x !== ''; });
+      if (!lines.length) return;
+      detHistory = lines;
+      // Dedup gegen die gleich folgende Live-Detailzeile: letzten Detailtext merken
+      // (Format „HH:MM:SS  <detail>" -> ab Position 10 steht der reine Detailtext).
+      detLastPush = lines[lines.length - 1].slice(10);
+      if (elDetPanel && !elDetPanel.hidden && elDetLog) {
+        elDetLog.textContent = detHistory.join('\n');
+        elDetLog.scrollTop = elDetLog.scrollHeight;
+      }
+    });
     statusES.addEventListener('status', function(ev){
       var s; try { s = JSON.parse(ev.data); } catch(e){ return; }
       zbShowRunning();   // ein Status-Event heißt: es läuft gerade

@@ -6946,8 +6946,13 @@ borg_archive_exists() {
 # Log. Pendant zu transfer_progress_from_pv, nur für borg create.
 borg_create_progress() {
     local total="$1" label="$2" line orig pct last="-1" step msg compact
-    local pmsg pcur ptot ppct plast="-1" apath abase lastpath=""
-    compact=$(compact_transfer_label "$label")
+    local pmsg pcur ptot ppct plast="-1" apath abase lastpath="" _ds _snap
+    # Sauberes Label aus dem Archivnamen <ds%>__<snap> ableiten (Dataset + Art).
+    # NICHT über compact_transfer_label – das ist für ZFS-Replikations-Labels
+    # ("scope mode … -> ds@snap") gedacht und gäbe den Archivnamen dreifach aus.
+    _ds="${label%%__*}"; _ds="${_ds//%//}"
+    _snap="${label#*__}"
+    compact="${_ds} $(snapshot_kind_from_name "$_snap")"
     while IFS= read -r line; do
         case "$line" in
             *'"archive_progress"'*)

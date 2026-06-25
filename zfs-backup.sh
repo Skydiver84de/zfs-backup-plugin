@@ -8186,9 +8186,12 @@ Verwendung:
       Prüft, ob das letzte erfolgreiche Backup älter als STALE_AFTER_HOURS ist,
       und meldet das einmal per Unraid-Notification (Wächter; 0 = aus).
 
-  zfs-backup.sh --log-tail [N]
-      Die letzten N Zeilen (Standard 50) des heutigen Logs ausgeben
-      (für die Live-Log-Ansicht der GUI).
+  zfs-backup.sh --log-tail [N] [YYYY-MM-DD]
+      Die letzten N Zeilen (Standard 50) des Logs ausgeben (für die Live-Log-
+      Ansicht der GUI). Optionales Datum wählt ein älteres Tageslog statt heute.
+
+  zfs-backup.sh --log-list
+      Verfügbare Tageslogs als Datum (YYYY-MM-DD) auflisten, neueste zuerst.
 
   zfs-backup.sh --log-follow [N]
       Dem heutigen Log live folgen (jede neue Zeile sofort ausgeben);
@@ -8487,9 +8490,28 @@ handle_cli() {
 
         --log-tail)
 
+            # Letzte N Zeilen eines Logfiles. Optionales Datum (YYYY-MM-DD) wählt ein
+            # älteres Tageslog statt des heutigen; striktes Format-Pattern verhindert
+            # Pfad-Ausbruch.
             local tail_n="${CLI_ARGS[1]:-50}"
             case "$tail_n" in ''|*[!0-9]*) tail_n=50 ;; esac
-            [ -f "$LOG_FILE" ] && tail -n "$tail_n" "$LOG_FILE"
+            local tail_file="$LOG_FILE"
+            case "${CLI_ARGS[2]:-}" in
+                "") ;;
+                [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) tail_file="${LOG_DIR}/zfs-backup-${CLI_ARGS[2]}.log" ;;
+                *) exit 1 ;;
+            esac
+            [ -f "$tail_file" ] && tail -n "$tail_n" "$tail_file"
+            exit 0
+            ;;
+
+        --log-list)
+
+            # Verfügbare Logdateien als Datum (YYYY-MM-DD), neueste zuerst – für die
+            # Datumsauswahl im Logs-Tab der GUI.
+            ls -1 "$LOG_DIR"/zfs-backup-*.log 2>/dev/null \
+                | sed -n 's#.*/zfs-backup-\([0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\)\.log$#\1#p' \
+                | sort -r
             exit 0
             ;;
 
@@ -9603,7 +9625,7 @@ fi
 # Befehlen, die das brauchen (Lauf/Pflege/Schreiben). Reine Lese-Befehle, die die
 # GUI beim Seitenaufbau mehrfach aufruft, überspringen das (Performance).
 case "$1" in
-    --version|--help|--status|--gui-init|--capacity|--datasets|--snapshots|--snapshot-tree|--refresh-snapshots|--dataset-snapshots|--snapshot-ls|--snapshot-cat|--targets|--config-schema|--borg-providers|--get-config|--log-tail|--log-follow|--progress-follow|--check-stale|--stop)
+    --version|--help|--status|--gui-init|--capacity|--datasets|--snapshots|--snapshot-tree|--refresh-snapshots|--dataset-snapshots|--snapshot-ls|--snapshot-cat|--targets|--config-schema|--borg-providers|--get-config|--log-tail|--log-list|--log-follow|--progress-follow|--check-stale|--stop)
         ;;
     *)
         config_maintain
@@ -9614,7 +9636,7 @@ esac
 # wird blockiert, bis die Config geprüft wurde.
 if [ "$CONFIG_UPDATED" -eq 1 ]; then
     case "$1" in
-        --help|--version|--status|--gui-init|--check-stale|--capacity|--datasets|--snapshots|--targets|--dataset-snapshots|--snapshot-tree|--refresh-snapshots|--snapshot-ls|--snapshot-cat|--snapshot-restore|--log-tail|--log-follow|--progress-follow|--config-check|--config-schema|--borg-providers|--borg-archives|--borg-check-update|--get-config|--set-config|--add-target|--delete-target|--edit-target|--test-target|--reorder-targets|--move-target|--reset-statistics|--reset-run-status|--delete-logs|--thin-history|--delete-managed-snapshots|--cleanup-orphans|--stop)
+        --help|--version|--status|--gui-init|--check-stale|--capacity|--datasets|--snapshots|--targets|--dataset-snapshots|--snapshot-tree|--refresh-snapshots|--snapshot-ls|--snapshot-cat|--snapshot-restore|--log-tail|--log-list|--log-follow|--progress-follow|--config-check|--config-schema|--borg-providers|--borg-archives|--borg-check-update|--get-config|--set-config|--add-target|--delete-target|--edit-target|--test-target|--reorder-targets|--move-target|--reset-statistics|--reset-run-status|--delete-logs|--thin-history|--delete-managed-snapshots|--cleanup-orphans|--stop)
             ;;
         *)
             echo

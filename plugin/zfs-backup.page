@@ -1050,6 +1050,11 @@ p.muted { color:#999; font-size:12px; }
 <!-- ===================== Tab: Logs ===================== -->
 <div class="zb-panel" data-panel="logs">
   <div class="zb-actions">
+    <label>Tag:
+      <select id="zb-log-date">
+        <option value="">Heute (live)</option>
+      </select>
+    </label>
     <label>Zeilen:
       <select id="zb-log-n">
         <option value="50">50</option>
@@ -1485,9 +1490,34 @@ p.muted { color:#999; font-size:12px; }
   // anhängen (mode=lines, Start 0 -> keine Doppelung mit dem geladenen Tail).
   var logBody   = document.getElementById('zb-log-body');
   var logSel    = document.getElementById('zb-log-n');
+  var logDate   = document.getElementById('zb-log-date');   // Tag/Logfile-Auswahl
   var logFilter = document.getElementById('zb-log-filter');
   var logCount  = document.getElementById('zb-log-count');
   var logES     = null;
+  var logDatesLoaded = false;
+
+  function zbTodayStr(){
+    var d = new Date(), p = function(x){ return (x < 10 ? '0' : '') + x; };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+  // Verfügbare Tageslogs einmalig ins Dropdown laden (heute deckt „Heute (live)" ab).
+  function zbLogDatesLoad(){
+    if (logDatesLoaded || !logDate) return;
+    logDatesLoaded = true;
+    fetch('/plugins/zfs-backup/include/logs.php?list=1')
+      .then(function(r){ return r.text(); })
+      .then(function(txt){
+        var today = zbTodayStr();
+        txt.split('\n').forEach(function(d){
+          d = d.trim();
+          if (!d || d === today) return;
+          var o = document.createElement('option');
+          o.value = d; o.textContent = d;
+          logDate.appendChild(o);
+        });
+      })
+      .catch(function(){ logDatesLoaded = false; });   // bei Fehler erneut versuchbar
+  }
   var logLines  = [];     // vollständiger Puffer (Tail + live), Filter nur Sicht
   var logQuery  = '';     // aktueller Filter (lowercase)
 
@@ -1524,20 +1554,28 @@ p.muted { color:#999; font-size:12px; }
       if (logQuery) logUpdateCount(logBody.textContent ? logBody.textContent.split('\n').length : 0);
     });
   }
-  // Tail (neu) laden, danach live weiterfolgen.
+  // Tail (neu) laden, danach live weiterfolgen (NUR fürs heutige Log).
   function zbLogsLoad(){
     if (!logBody) return;
+    zbLogDatesLoad();          // Dropdown füllen (idempotent)
     zbLogsStreamStop();
     logBody.textContent = 'Wird geladen …';
     var n = logSel ? logSel.value : 200;
-    fetch('/plugins/zfs-backup/include/logs.php?n=' + encodeURIComponent(n))
+    var date = logDate ? logDate.value : '';
+    var url = '/plugins/zfs-backup/include/logs.php?n=' + encodeURIComponent(n)
+            + (date ? '&date=' + encodeURIComponent(date) : '');
+    fetch(url)
       .then(function(r){ return r.text(); })
-      .then(function(txt){ logLines = txt.split('\n'); logRender(); logBody.scrollTop = logBody.scrollHeight; zbLogsStreamStart(); })
+      .then(function(txt){
+        logLines = txt.split('\n'); logRender(); logBody.scrollTop = logBody.scrollHeight;
+        if (!date) zbLogsStreamStart();   // Live nur fürs aktuelle (heutige) Log
+      })
       .catch(function(e){ logBody.textContent = 'Fehler beim Laden: ' + e; });
   }
   var logReload = document.getElementById('zb-log-reload');
   if (logReload) logReload.addEventListener('click', function(){ zbLogsLoad(); });
   if (logSel)    logSel.addEventListener('change', function(){ zbLogsLoad(); });
+  if (logDate)   logDate.addEventListener('change', function(){ zbLogsLoad(); });
   if (logFilter) logFilter.addEventListener('input', function(){
     logQuery = this.value.trim().toLowerCase();
     logRender();

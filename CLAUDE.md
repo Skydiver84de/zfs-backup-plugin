@@ -83,6 +83,17 @@ Snapshot-Bestand der Quelle.
 * Snapshot- und Replikationsstatistiken führen.
 * Readonly-Backups unterstützen.
 
+## Arbeitsweise
+
+* Vor dem Implementieren neuer Funktionalität IMMER per `grep` prüfen, ob sie
+  (oder ein verwandter Mechanismus / Config-Wert) schon existiert. Bestehende
+  Muster wiederverwenden oder erweitern (gleiche Feld-/Variablennamen) statt
+  Parallel-Lösungen danebenzustellen.
+* Den Code laufend auf Fehler und Optimierungsmöglichkeiten hin im Blick behalten
+  und Parallelstrukturen bestmöglich vermeiden bzw. zusammenführen.
+* Optimierungsvorschläge fürs Plugin jederzeit aktiv einbringen – auch
+  unaufgefordert, wenn beim Arbeiten etwas auffällt.
+
 ## Validierung
 
 Nach Änderungen an `zfs-backup.sh`:

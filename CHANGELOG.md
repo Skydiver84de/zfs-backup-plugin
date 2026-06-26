@@ -1,6 +1,6 @@
 # Changelog
 
-## 2026.06.25.r02 – Hotfix: Borg liest nicht mehr jeden Lauf alles neu
+## 2026.06.26.r01 – Hotfix: Borg liest nicht mehr jeden Lauf alles neu
 
 - **Borg-Lesecache korrigiert:** Borg verwarf seine Datei-Lesehistorie zu früh,
   wenn pro Lauf viele Datasets in dasselbe Repository gesichert werden. Dadurch

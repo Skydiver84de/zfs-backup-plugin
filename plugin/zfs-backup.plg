@@ -3,8 +3,8 @@
 <!DOCTYPE PLUGIN [
 <!ENTITY name      "zfs-backup">
 <!ENTITY author    "Skydiver84de">
-<!ENTITY version   "2026.06.26.r01">
-<!ENTITY md5       "5fb7ccc3a91618f60169d1ca4ceb01bf">
+<!ENTITY version   "2026.06.26.r02">
+<!ENTITY md5       "e7843c590b6e920b56159829b5b2adee">
 <!ENTITY plugdir   "/boot/config/plugins/&name;">
 <!ENTITY emhttp    "/usr/local/emhttp/plugins/&name;">
 <!ENTITY giturl    "https://raw.githubusercontent.com/Skydiver84de/zfs-backup-plugin/main">
@@ -30,6 +30,14 @@
 
 <CHANGES>
 <![CDATA[
+
+## 2026.06.26.r02 – Borg-Lesecache: dynamisch statt fester Reserve
+
+- **Borg-Lesecache verfeinert:** Die mit r01 eingeführte Reserve, die Borg davon
+  abhält, unveränderte Dateien bei jedem Lauf neu zu lesen, wird jetzt automatisch
+  passend zur Anzahl der gesicherten Snapshots gewählt statt fest hoch angesetzt.
+  Das hält den Cache schlank und gibt den Speicher gelöschter Datensätze zeitnah
+  wieder frei, während unveränderte Dateien zuverlässig übersprungen bleiben.
 
 ## 2026.06.26.r01 – Hotfix: Borg liest nicht mehr jeden Lauf alles neu
 

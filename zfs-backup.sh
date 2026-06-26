@@ -6906,10 +6906,18 @@ borg_run() {
     base="$(borg_base_dir)"
     mkdir -p "$base" 2>/dev/null
 
+    # BORG_FILES_CACHE_TTL hochsetzen (Default 20): wir legen je Lauf VIELE Archive
+    # (eines je Dataset/Snapshot) im SELBEN Repo an. Borg altert einen files-cache-
+    # Eintrag aus, wenn er in den letzten TTL `borg create`-Aufrufen nicht getroffen
+    # wurde. Bei ~24 Datasets liegen zwischen zwei Creates desselben Datasets ~23
+    # andere Creates -> mit Default 20 würde JEDES Dataset (auch das 2,65-TB-Video)
+    # bei jedem Lauf komplett neu gelesen. Großzügig hoch -> Einträge überleben über
+    # Läufe (auch Nachhol-Läufe mit Hunderten Archiven). Per Env überschreibbar.
     BORG_REPO="$BORG_REPO" \
     BORG_PASSPHRASE="$BORG_PASSPHRASE_VALUE" \
     BORG_BASE_DIR="$base" \
     BORG_RSH="ssh ${BORG_SSH_OPTIONS}" \
+    BORG_FILES_CACHE_TTL="${BORG_FILES_CACHE_TTL:-10000}" \
     "$bin" "$@"
 }
 

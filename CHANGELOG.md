@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026.06.26.r02 – Borg-Lesecache: dynamisch statt fester Reserve
+
+- **Borg-Lesecache verfeinert:** Die mit r01 eingeführte Reserve, die Borg davon
+  abhält, unveränderte Dateien bei jedem Lauf neu zu lesen, wird jetzt automatisch
+  passend zur Anzahl der gesicherten Snapshots gewählt statt fest hoch angesetzt.
+  Das hält den Cache schlank und gibt den Speicher gelöschter Datensätze zeitnah
+  wieder frei, während unveränderte Dateien zuverlässig übersprungen bleiben.
+
 ## 2026.06.26.r01 – Hotfix: Borg liest nicht mehr jeden Lauf alles neu
 
 - **Borg-Lesecache korrigiert:** Borg verwarf seine Datei-Lesehistorie zu früh,

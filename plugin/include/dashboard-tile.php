@@ -90,7 +90,7 @@ if (!function_exists('zfs_backup_dashboard_tile')) {
             if ($result !== 'ERFOLG') $rows .= $row('Letzter Erfolg', $h($st['last_success'] ?? null));
             $rows .= $row('Datasets', $dsc . ' gesichert');
             $rows .= $row('Snapshots (Quelle)', $invHtml);
-            $rows .= $row('Aktive Ziele', (int)($tg['local_active'] ?? 0) . ' lokal &middot; ' . (int)($tg['remote_active'] ?? 0) . ' remote');
+            $rows .= $row('Aktive Ziele', (int)($tg['local_active'] ?? 0) . ' lokal &middot; ' . (int)($tg['remote_active'] ?? 0) . ' remote &middot; ' . (int)($tg['borg_active'] ?? 0) . ' borg');
             if ($orphans > 0 || $srcOrphans > 0) {
                 $ow = [];
                 if ($orphans > 0)    $ow[] = $orphans . ' Ziel-Dataset(s)';

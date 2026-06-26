@@ -591,6 +591,7 @@ p.muted { color:#999; font-size:12px; }
       <table>
         <tr><td class="k">Lokal</td><td class="v"><?= (int)($tg['local_active'] ?? 0) ?></td></tr>
         <tr><td class="k">Remote</td><td class="v"><?= (int)($tg['remote_active'] ?? 0) ?></td></tr>
+        <tr><td class="k">Borg</td><td class="v"><?= (int)($tg['borg_active'] ?? 0) ?></td></tr>
         <tr><td class="k">Verwaiste Datasets / Snapshots</td><td class="v"><?= $orphans ?> Ziel-Dataset(s)<?php if ($srcOrphans > 0): ?>, <?= $srcOrphans ?> Quell-Snapshot(s) in <?= $srcOrphanDs ?> Dataset(s)<?php endif; ?></td></tr>
       </table>
     </div>

@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026.06.26.r03 – Borg-Anzeige und Benachrichtigung je Ziel
+
+- **Borg bei „Aktive Ziele":** Borg-Ziele werden jetzt auf der Statusseite und im
+  Dashboard-Kärtchen mitgezählt – vorher waren dort nur Lokal und Remote sichtbar.
+- **Benachrichtigung je Ziel:** Die Replikations-Bilanz steht nun pro Ziel mit
+  Namen – wie viele Datensätze bzw. Archive übertragen wurden, wie viele schon
+  aktuell waren und wie viele Fehler – statt nur summiert pro Zieltyp.
+
 ## 2026.06.26.r02 – Borg-Lesecache: dynamisch statt fester Reserve
 
 - **Borg-Lesecache verfeinert:** Die mit r01 eingeführte Reserve, die Borg davon

@@ -1921,6 +1921,13 @@ send_unraid_notify() {
     return 1
 }
 
+# Hängt eine Replikations-Bilanzzeile EINES Ziels (mit Label) an die Sammeldatei,
+# aus der build_notify_message die Per-Ziel-Bilanz baut. run_target_replications
+# leert die Datei zu Beginn jedes Laufs; sie persistiert wie last_run_stats.
+append_target_balance() {
+    printf '%s\n' "$1" >> "${STATE_DIR}/last_run_target_balance" 2>/dev/null
+}
+
 build_notify_message() {
     local include_error="${1:-no}"
     local created_total
@@ -1928,20 +1935,23 @@ build_notify_message() {
     local runtime
     local datasets
     local last_error
-    local borg_prune="" borg_repl_nl=""
+    local borg_prune="" target_balance=""
 
     result=$(read_run_stat RESULT "-")
     runtime=$(read_run_stat RUNTIME_SECONDS 0)
     datasets=$(read_run_stat DATASETS 0)
     created_total=$(read_run_stat CREATED_TOTAL 0)
 
-    # borg nur einblenden, wenn ein borg-Ziel konfiguriert ist (sonst keine Zeile
-    # voller Nullen in der Nachricht). borg_repl_nl bringt seinen eigenen Zeilen-
-    # umbruch mit -> kein Leerraum, wenn leer.
+    # Borg-Pruning-Zahl nur einblenden, wenn ein borg-Ziel konfiguriert ist (sonst
+    # keine „Borg 0"-Spalte in der Pruning-Zeile).
     if [ "$(target_enabled_count borg)" -gt 0 ]; then
         borg_prune=", Borg $(read_run_stat BORG_DELETED 0)"
-        borg_repl_nl=$'\n'"Borg: $(read_run_stat BORG_CREATED 0) neu, $(read_run_stat BORG_SKIPPED 0) vorhanden, $(read_run_stat BORG_ERRORS 0) Fehler"
     fi
+
+    # Replikations-Bilanz JE ZIEL (mit Label) – während des Laufs in
+    # last_run_target_balance gesammelt (append_target_balance). Eine Zeile je Ziel.
+    target_balance=$(cat "${STATE_DIR}/last_run_target_balance" 2>/dev/null)
+    [ -n "$target_balance" ] || target_balance="(keine aktiven Ziele)"
 
     cat <<EOF
 Ergebnis: ${result}
@@ -1952,8 +1962,8 @@ Bestand Quelle: $(read_run_stat SOURCE_INVENTORY_TOTAL 0) verwaltet (H $(read_ru
 
 Pruning: Quelle $(read_run_stat DELETED 0), Lokal $(read_run_stat LOCAL_DELETED 0), Remote $(read_run_stat REMOTE_DELETED 0)${borg_prune} gelöscht
 Verwaiste Datasets / Snapshots: $(read_run_stat ORPHAN_DATASETS 0) Ziel-Dataset(s), $(read_run_stat SOURCE_ORPHAN_SNAPSHOTS 0) Quell-Snapshot(s) in $(read_run_stat SOURCE_ORPHAN_DATASETS 0) Dataset(s) (nicht automatisch gelöscht; Aufräumen: --cleanup-orphans)
-Lokal: $(read_run_stat REPLICATION_FULL 0) Full, $(read_run_stat REPLICATION_INCREMENTAL 0) Incr, $(read_run_stat REPLICATION_RESUMED 0) Resume, $(read_run_stat REPLICATION_SKIPPED 0) aktuell, $(read_run_stat REPLICATION_ERRORS 0) Fehler
-Remote: $(read_run_stat REMOTE_REPLICATION_FULL 0) Full, $(read_run_stat REMOTE_REPLICATION_INCREMENTAL 0) Incr, $(read_run_stat REMOTE_REPLICATION_RESUMED 0) Resume, $(read_run_stat REMOTE_REPLICATION_SKIPPED 0) aktuell, $(read_run_stat REMOTE_REPLICATION_ERRORS 0) Fehler${borg_repl_nl}
+Ziele je Ziel (übertragen / aktuell bzw. vorhanden / Fehler):
+${target_balance}
 
 Speicher: Quelle $(format_bytes "$(read_run_stat SOURCE_SNAPSHOT_USED 0)"), Lokal $(format_bytes "$(read_run_stat LOCAL_SNAPSHOT_USED 0)"), Remote $(format_bytes "$(read_run_stat REMOTE_SNAPSHOT_USED 0)")
 EOF
@@ -5702,6 +5712,7 @@ run_local_replication() {
     console_info "Snapshot-Bestand Lokal: ${inv_total} verwaltete Snapshots (Hourly ${inv_h}, Daily ${inv_d}, Weekly ${inv_w}, Monthly ${inv_m}, Yearly ${inv_y})"
     # Bilanz auch ins Logfile (sichtbar selbst wenn nichts zu tun war).
     log "Lokale Replikation ${CURRENT_TARGET_LABEL}: $((REPLICATION_FULL-b_full)) Full, $((REPLICATION_INCREMENTAL-b_inc)) inkrementell, $((REPLICATION_RESUMED-b_res)) fortgesetzt, $((REPLICATION_SKIPPED-b_skip)) aktuell, $((REPLICATION_ERRORS-b_err)) Fehler"
+    append_target_balance "${CURRENT_TARGET_LABEL} (lokal): $(( (REPLICATION_FULL-b_full)+(REPLICATION_INCREMENTAL-b_inc)+(REPLICATION_RESUMED-b_res) )) übertragen, $((REPLICATION_SKIPPED-b_skip)) aktuell, $((REPLICATION_ERRORS-b_err)) Fehler"
 }
 
 run_target_replication() {
@@ -5719,6 +5730,7 @@ run_target_replication() {
 }
 
 run_target_replications() {
+    : > "${STATE_DIR}/last_run_target_balance" 2>/dev/null  # Per-Ziel-Bilanz frisch sammeln
     for_each_enabled_target all run_target_replication
 }
 
@@ -6444,6 +6456,7 @@ run_remote_replication() {
     console_info "Snapshot-Bestand Remote: ${inv_total} verwaltete Snapshots (Hourly ${inv_h}, Daily ${inv_d}, Weekly ${inv_w}, Monthly ${inv_m}, Yearly ${inv_y})"
     # Bilanz auch ins Logfile (sichtbar selbst wenn nichts zu tun war).
     log "Remote-Replikation ${CURRENT_TARGET_LABEL}: $((REMOTE_REPLICATION_FULL-b_full)) Full, $((REMOTE_REPLICATION_INCREMENTAL-b_inc)) inkrementell, $((REMOTE_REPLICATION_RESUMED-b_res)) fortgesetzt, $((REMOTE_REPLICATION_SKIPPED-b_skip)) aktuell, $((REMOTE_REPLICATION_ERRORS-b_err)) Fehler"
+    append_target_balance "${CURRENT_TARGET_LABEL} (remote): $(( (REMOTE_REPLICATION_FULL-b_full)+(REMOTE_REPLICATION_INCREMENTAL-b_inc)+(REMOTE_REPLICATION_RESUMED-b_res) )) übertragen, $((REMOTE_REPLICATION_SKIPPED-b_skip)) aktuell, $((REMOTE_REPLICATION_ERRORS-b_err)) Fehler"
 }
 
 # Run-Phase: verwaiste Ziel-Datasets nur ERKENNEN und LOGGEN, NIEMALS automatisch
@@ -7318,6 +7331,7 @@ run_borg_replication() {
     console_info "Archive: ${BORG_CREATED_ARCHIVES} neu erstellt"
     # Bilanz auch ins Logfile (sichtbar selbst wenn nichts erstellt wurde).
     log "Borg-Replikation ${CURRENT_TARGET_LABEL}: $((BORG_CREATED_ARCHIVES-before_created)) neu, $((BORG_SKIPPED_ARCHIVES-before_skipped)) bereits vorhanden, $((BORG_REPLICATION_ERRORS-before_errors)) Fehler"
+    append_target_balance "${CURRENT_TARGET_LABEL} (borg): $((BORG_CREATED_ARCHIVES-before_created)) übertragen, $((BORG_SKIPPED_ARCHIVES-before_skipped)) vorhanden, $((BORG_REPLICATION_ERRORS-before_errors)) Fehler"
 }
 
 # Borg-Zielabgleich: löscht je Dataset die Archive im eigenen Namespace

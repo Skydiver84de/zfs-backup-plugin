@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026.06.25.r02 – Hotfix: Borg liest nicht mehr jeden Lauf alles neu
+
+- **Borg-Lesecache korrigiert:** Borg verwarf seine Datei-Lesehistorie zu früh,
+  wenn pro Lauf viele Datasets in dasselbe Repository gesichert werden. Dadurch
+  wurde jedes Dataset – auch ein mehrere Terabyte großes – bei jedem Lauf komplett
+  neu von der Platte gelesen statt nur der Änderungen. Der Cache hält die
+  Leseinformationen jetzt dauerhaft, sodass unveränderte Dateien über Läufe hinweg
+  zuverlässig übersprungen werden.
+
 ## 2026.06.25.r01 – Borg-Offsite-Backup
 
 - **Neuer Zieltyp Borg:** Backups lassen sich jetzt zusätzlich in ein entferntes

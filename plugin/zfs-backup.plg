@@ -3,8 +3,8 @@
 <!DOCTYPE PLUGIN [
 <!ENTITY name      "zfs-backup">
 <!ENTITY author    "Skydiver84de">
-<!ENTITY version   "2026.06.26.r02">
-<!ENTITY md5       "e7843c590b6e920b56159829b5b2adee">
+<!ENTITY version   "2026.06.26.r03">
+<!ENTITY md5       "15e949d2e0cd7f0aabfbedf1a03be778">
 <!ENTITY plugdir   "/boot/config/plugins/&name;">
 <!ENTITY emhttp    "/usr/local/emhttp/plugins/&name;">
 <!ENTITY giturl    "https://raw.githubusercontent.com/Skydiver84de/zfs-backup-plugin/main">
@@ -30,6 +30,14 @@
 
 <CHANGES>
 <![CDATA[
+
+## 2026.06.26.r03 – Borg-Anzeige und Benachrichtigung je Ziel
+
+- **Borg bei „Aktive Ziele":** Borg-Ziele werden jetzt auf der Statusseite und im
+  Dashboard-Kärtchen mitgezählt – vorher waren dort nur Lokal und Remote sichtbar.
+- **Benachrichtigung je Ziel:** Die Replikations-Bilanz steht nun pro Ziel mit
+  Namen – wie viele Datensätze bzw. Archive übertragen wurden, wie viele schon
+  aktuell waren und wie viele Fehler – statt nur summiert pro Zieltyp.
 
 ## 2026.06.26.r02 – Borg-Lesecache: dynamisch statt fester Reserve
 

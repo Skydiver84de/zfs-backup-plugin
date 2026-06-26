@@ -3,8 +3,8 @@
 <!DOCTYPE PLUGIN [
 <!ENTITY name      "zfs-backup">
 <!ENTITY author    "Skydiver84de">
-<!ENTITY version   "2026.06.25.r01">
-<!ENTITY md5       "cbc3489447ad30e3868a250e0a98dafe">
+<!ENTITY version   "2026.06.26.r01">
+<!ENTITY md5       "5fb7ccc3a91618f60169d1ca4ceb01bf">
 <!ENTITY plugdir   "/boot/config/plugins/&name;">
 <!ENTITY emhttp    "/usr/local/emhttp/plugins/&name;">
 <!ENTITY giturl    "https://raw.githubusercontent.com/Skydiver84de/zfs-backup-plugin/main">
@@ -30,6 +30,15 @@
 
 <CHANGES>
 <![CDATA[
+
+## 2026.06.26.r01 – Hotfix: Borg liest nicht mehr jeden Lauf alles neu
+
+- **Borg-Lesecache korrigiert:** Borg verwarf seine Datei-Lesehistorie zu früh,
+  wenn pro Lauf viele Datasets in dasselbe Repository gesichert werden. Dadurch
+  wurde jedes Dataset – auch ein mehrere Terabyte großes – bei jedem Lauf komplett
+  neu von der Platte gelesen statt nur der Änderungen. Der Cache hält die
+  Leseinformationen jetzt dauerhaft, sodass unveränderte Dateien über Läufe hinweg
+  zuverlässig übersprungen werden.
 
 ## 2026.06.25.r01 – Borg-Offsite-Backup
 

@@ -6906,19 +6906,80 @@ borg_run() {
     base="$(borg_base_dir)"
     mkdir -p "$base" 2>/dev/null
 
-    # BORG_FILES_CACHE_TTL hochsetzen (Default 20): wir legen je Lauf VIELE Archive
-    # (eines je Dataset/Snapshot) im SELBEN Repo an. Borg altert einen files-cache-
-    # Eintrag aus, wenn er in den letzten TTL `borg create`-Aufrufen nicht getroffen
-    # wurde. Bei ~24 Datasets liegen zwischen zwei Creates desselben Datasets ~23
-    # andere Creates -> mit Default 20 würde JEDES Dataset (auch das 2,65-TB-Video)
-    # bei jedem Lauf komplett neu gelesen. Großzügig hoch -> Einträge überleben über
-    # Läufe (auch Nachhol-Läufe mit Hunderten Archiven). Per Env überschreibbar.
+    # BORG_FILES_CACHE_TTL verhindert, dass borg unveränderte Dateien jeden Lauf
+    # neu liest (Default 20 ist für unser Viele-Archive-pro-Repo-Muster viel zu
+    # niedrig – siehe ausführliche Herleitung bei borg_files_cache_ttl). Während
+    # eines Laufs setzt run_borg_replication den dynamisch berechneten Wert in die
+    # globale Variable; hier greift er dann über die Expansion. Für einzelne
+    # borg-Aufrufe AUSSERHALB eines Laufs (GUI list/info – kein create, TTL also
+    # irrelevant) ist die Variable nicht gesetzt -> sicherer Default unten.
     BORG_REPO="$BORG_REPO" \
     BORG_PASSPHRASE="$BORG_PASSPHRASE_VALUE" \
     BORG_BASE_DIR="$base" \
     BORG_RSH="ssh ${BORG_SSH_OPTIONS}" \
     BORG_FILES_CACHE_TTL="${BORG_FILES_CACHE_TTL:-10000}" \
     "$bin" "$@"
+}
+
+# Dynamische files-cache-TTL für borg-create. HERLEITUNG (wichtig – hier steckte
+# ein böser Bug, der erst im echten Mehr-Dataset-Dauerbetrieb auftrat; darum
+# ausführlich, damit das später nachvollziehbar und korrigierbar bleibt):
+#
+# Borgs files-cache überspringt das erneute LESEN+Chunken unveränderter Dateien.
+# Borg verwirft einen Eintrag aber, wenn er in den letzten BORG_FILES_CACHE_TTL
+# `borg create`-AUFRUFEN nicht getroffen (gematcht) wurde. Default = 20.
+#
+# Wir legen je Lauf VIELE Archive im SELBEN Repo an (eines je Dataset/Snapshot).
+# WICHTIG: Nur tatsächlich ERSTELLTE Archive altern den Cache – übersprungene
+# (bereits vorhandene) rufen kein `borg create` auf, also kein Commit, keine
+# Alterung. Die Archive EINES Datasets entstehen direkt hintereinander
+# (replicate_dataset_borg läuft je Dataset durch) -> dessen Einträge bleiben
+# dabei frisch.
+#
+# "Lücke" eines Datasets D = (in Lauf N NACH D erstellte Archive) + (in Lauf N+1
+# VOR D erstellte Archive) <= C_N + C_{N+1}. Dabei ist C = Creates eines Laufs und
+# C <= S (Gesamtzahl verwalteter Quell-Snapshots – mehr Archive als Snapshots gibt
+# es nicht). Mit Default 20 und ~24 Datasets liegen ~23 fremde Creates zwischen
+# zwei Creates desselben Datasets -> JEDES Dataset (auch das 2,65-TB-Video) wird
+# JEDEN Lauf komplett neu gelesen. Am Zielsystem reproduziert: Schwelle exakt 20.
+#
+# FIX:  TTL = S_vorher + S_aktuell + Puffer
+#   - S_aktuell: aktuelle Zahl verwalteter Quell-Snapshots (unabhängig davon, ob
+#     Archive schon existieren -> auch im Initial-Lauf korrekt hoch).
+#   - S_vorher : S des letzten Laufs (persistent je Ziel). Nötig NUR für den
+#     einzigen Fall, den blankes 2×S_aktuell nicht deckt: MASSEN-LÖSCHUNG von
+#     Datasets. Dann bricht S_aktuell ein, aber ein überlebendes Dataset trägt aus
+#     dem vorigen (großen) Lauf ein Alter bis C_N <= S_vorher mit -> S_vorher hält
+#     die TTL genau diesen einen Lauf hoch genug; den Lauf darauf schrumpft sie.
+#   Beweis: Lücke <= C_N + C_{N+1} <= S_vorher + S_aktuell <= TTL. Gilt in ALLEN
+#   Fällen (Steady State, Rollover aller Snapshot-Typen, Initial-Upload, viele neue
+#   Datasets auf einmal, schrittweises Pruning, Massen-Löschung).
+#   - Puffer (+MARGIN): borg cached eine eben geschriebene Datei (sehr frischer
+#     mtime) NICHT -> sie zählt als 1 Miss; plus Ordnungs-Off-by-one.
+#   - Mindestwert: damit auch winzige Setups (oder S=0) Reserve haben.
+#
+# Selbstskalierend & sparsam: Steady State ~ 2×S; gelöschte Datasets verfallen aus
+# dem Cache in ~S Läufen (Wochen), nicht „für immer".
+#
+# WENN ES DOCH WIEDER NEU LIEST (Debug): Im Log steht je Lauf die berechnete TTL
+# samt S_vorher/S_aktuell (run_borg_replication). Prüfen, ob TTL >= tatsächliche
+# Lücke ist; Lücke grob = in EINEM Lauf erstellte Archive. Notfalls Formel erhöhen
+# (z. B. Faktor statt Summe) oder als Sofortmaßnahme einen festen hohen Wert setzen
+# (Env BORG_FILES_CACHE_TTL bzw. den Default in borg_run).
+borg_files_cache_ttl() {
+    local s_cur s_prev key margin=100 ttl
+    # S_aktuell mit EINEM zfs-list über alle Snapshots (filter zählt nur aktive,
+    # verwaltete) – kein zfs-list je Dataset.
+    s_cur=$(zfs list -H -t snapshot -o name 2>/dev/null \
+        | filter_managed_snapshot_lines cat | grep -c .)
+    case "$s_cur" in ''|*[!0-9]*) s_cur=0 ;; esac
+    key="borg_snapshot_count_${CURRENT_TARGET_ID}"
+    s_prev=$(state_value "$key" "$s_cur")
+    case "$s_prev" in ''|*[!0-9]*) s_prev=$s_cur ;; esac
+    write_state "$key" "$s_cur"
+    ttl=$(( s_prev + s_cur + margin ))
+    [ "$ttl" -lt 100 ] && ttl=100
+    printf '%s' "$ttl"
 }
 
 # Archivname je verwaltetem Snapshot: <dataset>__<snap>, wobei „/" im Dataset
@@ -7234,6 +7295,13 @@ run_borg_replication() {
 
     mapfile -t datasets < <(get_datasets)
     total=${#datasets[@]}
+
+    # files-cache-TTL für ALLE borg-create-Aufrufe dieses Laufs dynamisch setzen,
+    # damit unveränderte Dateien nicht jeden Lauf neu gelesen werden (Default 20 ist
+    # für unser Viele-Archive-pro-Repo-Muster zu niedrig). Volle Herleitung bei
+    # borg_files_cache_ttl. Wert ins Log, damit ein erneutes Neu-Lesen debugbar ist.
+    BORG_FILES_CACHE_TTL=$(borg_files_cache_ttl)
+    log "Borg files-cache-TTL: ${BORG_FILES_CACHE_TTL} (verwaltete Snapshots; verhindert erneutes Voll-Lesen unveränderter Dateien)"
 
     for ds in "${datasets[@]}"; do
         [ -n "$ds" ] || continue

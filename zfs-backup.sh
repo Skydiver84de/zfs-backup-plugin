@@ -704,9 +704,6 @@ NOTIFY_SUCCESS="normal"
 # Benachrichtigung bei Fehlern.
 NOTIFY_ERROR="alert"
 
-# Benachrichtigung, wenn ein Lauf verwaiste Ziel-Datasets findet (Quelle gelöscht).
-NOTIFY_ORPHANS="warning"
-
 # Warnen, wenn das letzte erfolgreiche Backup älter als N Stunden ist (0 = aus).
 # Der Wächter läuft nur bei aktivem Zeitplan (Unraid-Plugin) und meldet einmal.
 STALE_AFTER_HOURS=26
@@ -1355,7 +1352,7 @@ extract_custom_config_entries() {
     local obsolete
 
     known=$(config_known_options_pattern)
-    obsolete="ENABLE_LOCAL_REPLICATION|LOCAL_BACKUP_POOL|ENABLE_REMOTE_REPLICATION|REMOTE_HOST|REMOTE_BASE_DATASET|REMOTE_SSH_OPTIONS|ENABLE_REMOTE_WAKE_ON_LAN|REMOTE_WAKE_MAC|REMOTE_WAKE_TIMEOUT_SECONDS|REMOTE_WAKE_CHECK_INTERVAL_SECONDS|REMOTE_REPLICATION_RETRY_ATTEMPTS|REMOTE_REPLICATION_RETRY_WAIT_SECONDS|ENABLE_LOCAL_REPLICATION_PRUNING|ENABLE_REMOTE_REPLICATION_PRUNING|CHECK_FOR_UPDATES|UPDATE_BRANCH"
+    obsolete="ENABLE_LOCAL_REPLICATION|LOCAL_BACKUP_POOL|ENABLE_REMOTE_REPLICATION|REMOTE_HOST|REMOTE_BASE_DATASET|REMOTE_SSH_OPTIONS|ENABLE_REMOTE_WAKE_ON_LAN|REMOTE_WAKE_MAC|REMOTE_WAKE_TIMEOUT_SECONDS|REMOTE_WAKE_CHECK_INTERVAL_SECONDS|REMOTE_REPLICATION_RETRY_ATTEMPTS|REMOTE_REPLICATION_RETRY_WAIT_SECONDS|ENABLE_LOCAL_REPLICATION_PRUNING|ENABLE_REMOTE_REPLICATION_PRUNING|CHECK_FOR_UPDATES|UPDATE_BRANCH|NOTIFY_ORPHANS"
 
     awk -v known="$known" -v obsolete="$obsolete" '
         /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=/ {
@@ -1511,11 +1508,6 @@ EOF
         write_config_scalar NOTIFY_ERROR "$NOTIFY_ERROR"
         cat <<'EOF'
 
-# Benachrichtigung bei verwaisten Ziel-Datasets (Quelle gelöscht/inaktiv).
-EOF
-        write_config_scalar NOTIFY_ORPHANS "$NOTIFY_ORPHANS"
-        cat <<'EOF'
-
 # Warnen, wenn das letzte erfolgreiche Backup älter als N Stunden ist (0 = aus).
 # Der Wächter läuft nur bei aktivem Zeitplan (Unraid-Plugin) und meldet einmal.
 EOF
@@ -1628,7 +1620,6 @@ load_config() {
     : "${NOTIFY_START:=aus}"
     : "${NOTIFY_SUCCESS:=normal}"
     : "${NOTIFY_ERROR:=alert}"
-    : "${NOTIFY_ORPHANS:=warning}"
     : "${STALE_AFTER_HOURS:=26}"
     : "${SCHEDULE_ENABLED:=no}"
     : "${SCHEDULE_CRON:=}"
@@ -1935,7 +1926,8 @@ build_notify_message() {
     local runtime
     local datasets
     local last_error
-    local borg_prune="" target_balance=""
+    local borg_prune="" target_balance="" orphan_line=""
+    local ot os osd
 
     result=$(read_run_stat RESULT "-")
     runtime=$(read_run_stat RUNTIME_SECONDS 0)
@@ -1946,6 +1938,16 @@ build_notify_message() {
     # keine „Borg 0"-Spalte in der Pruning-Zeile).
     if [ "$(target_enabled_count borg)" -gt 0 ]; then
         borg_prune=", Borg $(read_run_stat BORG_DELETED 0)"
+    fi
+
+    # Verwaiste Datasets NUR erwähnen, wenn welche gefunden wurden – kompakt und als
+    # Teil dieser Lauf-Meldung. Keine separate Notification mehr (war redundant, kam
+    # bei bestehenden Verwaisten bei jedem Lauf zusätzlich).
+    ot=$(read_run_stat ORPHAN_DATASETS 0)
+    os=$(read_run_stat SOURCE_ORPHAN_SNAPSHOTS 0)
+    osd=$(read_run_stat SOURCE_ORPHAN_DATASETS 0)
+    if [ "${ot:-0}" -gt 0 ] 2>/dev/null || [ "${os:-0}" -gt 0 ] 2>/dev/null; then
+        orphan_line="Verwaist: ${ot} Ziel-Dataset(s), ${os} Quell-Snapshot(s) in ${osd} Dataset(s) – nicht auto-gelöscht (Aufräumen: Wartung / --cleanup-orphans)"
     fi
 
     # Replikations-Bilanz JE ZIEL (mit Label) – während des Laufs in
@@ -1960,9 +1962,9 @@ Laufzeit: $(format_duration "$runtime") | Datasets: ${datasets}
 Snapshots: ${created_total} neu (H $(read_run_stat CREATED_HOURLY 0), D $(read_run_stat CREATED_DAILY 0), W $(read_run_stat CREATED_WEEKLY 0), M $(read_run_stat CREATED_MONTHLY 0), Y $(read_run_stat CREATED_YEARLY 0))
 Bestand Quelle: $(read_run_stat SOURCE_INVENTORY_TOTAL 0) verwaltet (H $(read_run_stat SOURCE_INVENTORY_HOURLY 0), D $(read_run_stat SOURCE_INVENTORY_DAILY 0), W $(read_run_stat SOURCE_INVENTORY_WEEKLY 0), M $(read_run_stat SOURCE_INVENTORY_MONTHLY 0), Y $(read_run_stat SOURCE_INVENTORY_YEARLY 0))
 
-Pruning: Quelle $(read_run_stat DELETED 0), Lokal $(read_run_stat LOCAL_DELETED 0), Remote $(read_run_stat REMOTE_DELETED 0)${borg_prune} gelöscht
-Verwaiste Datasets / Snapshots: $(read_run_stat ORPHAN_DATASETS 0) Ziel-Dataset(s), $(read_run_stat SOURCE_ORPHAN_SNAPSHOTS 0) Quell-Snapshot(s) in $(read_run_stat SOURCE_ORPHAN_DATASETS 0) Dataset(s) (nicht automatisch gelöscht; Aufräumen: --cleanup-orphans)
-Ziele je Ziel (übertragen / aktuell bzw. vorhanden / Fehler):
+Pruning/Zielabgleich: Quelle $(read_run_stat DELETED 0), Lokal $(read_run_stat LOCAL_DELETED 0), Remote $(read_run_stat REMOTE_DELETED 0)${borg_prune} entfernt
+${orphan_line:+$orphan_line
+}Ziele je Ziel (übertragen / aktuell bzw. vorhanden / Fehler):
 ${target_balance}
 
 Speicher: Quelle $(format_bytes "$(read_run_stat SOURCE_SNAPSHOT_USED 0)"), Lokal $(format_bytes "$(read_run_stat LOCAL_SNAPSHOT_USED 0)"), Remote $(format_bytes "$(read_run_stat REMOTE_SNAPSHOT_USED 0)")
@@ -2006,17 +2008,6 @@ notify_error() {
         "ZFS Backup: Lauf mit Fehlern" \
         "$(build_notify_message yes)" \
         "$NOTIFY_ERROR"
-}
-
-notify_orphans() {
-    [ "$NOTIFY_ORPHANS" = "aus" ] && return 0
-    local t="${ORPHAN_DATASETS_FOUND:-0}" s="${SOURCE_ORPHAN_SNAPSHOTS_FOUND:-0}" sd="${SOURCE_ORPHAN_DATASETS_FOUND:-0}"
-    [ "$t" -gt 0 ] || [ "$s" -gt 0 ] || return 0
-
-    send_unraid_notify \
-        "ZFS Backup: verwaiste Datasets / Snapshots" \
-        "${t} verwaiste Ziel-Dataset(s) (Quelle gelöscht/außer Betrieb) und ${s} verwaiste Quell-Snapshot(s) in ${sd} außer Betrieb genommenen Dataset(s) gefunden. Werden NICHT automatisch gelöscht – Aufräumen über die Wartung (Verwaiste Datasets / Snapshots)." \
-        "$NOTIFY_ORPHANS"
 }
 
 ########################################
@@ -2226,7 +2217,7 @@ config_check() {
         ((warnings++))
     fi
 
-    if [ "$NOTIFY_START" != "aus" ] || [ "$NOTIFY_SUCCESS" != "aus" ] || [ "$NOTIFY_ERROR" != "aus" ] || [ "$NOTIFY_ORPHANS" != "aus" ]; then
+    if [ "$NOTIFY_START" != "aus" ] || [ "$NOTIFY_SUCCESS" != "aus" ] || [ "$NOTIFY_ERROR" != "aus" ]; then
         if [ ! -x "$UNRAID_NOTIFY_BIN" ]; then
             console_warn "Unraid-Notification-Tool nicht gefunden (${UNRAID_NOTIFY_BIN}) – Benachrichtigungen werden übersprungen"
             ((warnings++))
@@ -2248,7 +2239,7 @@ config_check() {
     printf "  Retention    %sh/%sd/%sw/%sm/%sy\n" "$KEEP_HOURLY" "$KEEP_DAILY" "$KEEP_WEEKLY" "$KEEP_MONTHLY" "$KEEP_YEARLY"
     printf "  Ziele        %s konfiguriert, %s aktiv\n" "${#TARGETS[@]}" "$(target_enabled_count all)"
     printf "  Wartung      Quell-Pruning %s  |  Zielabgleich automatisch\n" "$ENABLE_SOURCE_PRUNING"
-    printf "  Notify       Start %s  |  Erfolg %s  |  Fehler %s  |  Verwaist %s\n" "$NOTIFY_START" "$NOTIFY_SUCCESS" "$NOTIFY_ERROR" "$NOTIFY_ORPHANS"
+    printf "  Notify       Start %s  |  Erfolg %s  |  Fehler %s\n" "$NOTIFY_START" "$NOTIFY_SUCCESS" "$NOTIFY_ERROR"
     if [ "${STALE_AFTER_HOURS:-0}" -gt 0 ] 2>/dev/null; then
         printf "  Veraltet-Warnung ab %s h\n" "$STALE_AFTER_HOURS"
     fi
@@ -9376,7 +9367,6 @@ Logs / Benachrichtigung|LOG_RETENTION_DAYS|number|Anzahl Tage, die tägliche Log
 Logs / Benachrichtigung|NOTIFY_START|enum:aus,normal,warning,alert|Unraid-Notification beim Start eines Laufs. Stufe wählen oder "aus".
 Logs / Benachrichtigung|NOTIFY_SUCCESS|enum:aus,normal,warning,alert|Unraid-Notification bei erfolgreichem Lauf. Stufe wählen oder "aus".
 Logs / Benachrichtigung|NOTIFY_ERROR|enum:aus,normal,warning,alert|Unraid-Notification bei Fehlern. Stufe wählen oder "aus".
-Logs / Benachrichtigung|NOTIFY_ORPHANS|enum:aus,normal,warning,alert|Unraid-Notification, wenn ein Lauf verwaiste Datasets findet – verwaiste Ziel-Datasets (Quelle gelöscht/außer Betrieb) oder außer Betrieb genommene Quell-Datasets mit Restsnapshots. Stufe wählen oder "aus".
 Logs / Benachrichtigung|STALE_AFTER_HOURS|number|Warnen, wenn das letzte erfolgreiche Backup älter als N Stunden ist (0 = aus). Wächter läuft nur bei aktivem Zeitplan.
 Zeitplan|SCHEDULE_ENABLED|bool|Geplanten Lauf aktivieren. Nur das Unraid-Plugin wertet dies aus (Cron).
 Zeitplan|SCHEDULE_CRON|string|Cron-Ausdruck (Minute Stunde Tag Monat Wochentag). Vom Zeitplan-Tab gepflegt.
@@ -9964,9 +9954,6 @@ rotate_logs
 borg_update_refresh
 
 show_run_summary
-
-# Verwaiste Ziel-Datasets gefunden? Unraid-Warnung (unabhängig von Erfolg/Fehler).
-notify_orphans
 
 if [ "$RUN_ERRORS" -eq 0 ]; then
     write_state \

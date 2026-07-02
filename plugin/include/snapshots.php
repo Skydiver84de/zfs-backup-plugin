@@ -132,10 +132,10 @@ $scopes   = $tree['scopes'] ?? [];
         <tbody>
           <?php if (count($rows) === 0): ?>
             <tr><td colspan="8" class="empty">Keine Datasets.</td></tr>
-          <?php else: foreach ($rows as $row): $rds = (string)($row['dataset'] ?? ''); ?>
-            <tr class="zb-ds-row" data-ds="<?= zb_h($rds, '') ?>" data-scope="<?= zb_h($sid, '') ?>"
-                title="Snapshots anzeigen">
-              <td><span class="zb-caret">▸</span> <?= zb_h($rds) ?></td>
+          <?php else: foreach ($rows as $row): $rds = (string)($row['dataset'] ?? ''); $isOrphan = !empty($row['orphan']); ?>
+            <tr class="zb-ds-row<?= $isOrphan ? ' zb-ds-orphan' : '' ?>" data-ds="<?= zb_h($rds, '') ?>" data-scope="<?= zb_h($sid, '') ?>"
+                title="<?= $isOrphan ? 'Verwaist – Quell-Dataset nicht mehr im Backup-Umfang; Snapshots existieren hier noch (Aufräumen über Wartung)' : 'Snapshots anzeigen' ?>">
+              <td><span class="zb-caret">▸</span> <?= zb_h($rds) ?><?= $isOrphan ? ' <span class="zb-badge-orphan">verwaist</span>' : '' ?></td>
               <td class="num"><?= (int)($row['hourly'] ?? 0) ?></td>
               <td class="num"><?= (int)($row['daily'] ?? 0) ?></td>
               <td class="num"><?= (int)($row['weekly'] ?? 0) ?></td>

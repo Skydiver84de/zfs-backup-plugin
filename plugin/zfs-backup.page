@@ -223,6 +223,11 @@ $csrf = $var['csrf_token'] ?? '';
 .zb-caret { display:inline-block; width:1em; color:#888; transition:transform .12s; }
 .zb-ds-row.open .zb-caret { transform:rotate(90deg); }
 .zb-ds-detail > td { padding:0 12px 12px 26px; }
+/* Verwaiste Datasets: Quelle nicht mehr im Umfang, Snapshots hier noch vorhanden. */
+.zb-ds-orphan > td:first-child { color:#E0A030; }
+.zb-badge-orphan { margin-left:8px; padding:0 6px; border-radius:6px; font-size:11px;
+  font-weight:600; text-transform:uppercase; letter-spacing:.03em;
+  color:#8a5a00; background:rgba(224,160,48,.18); border:1px solid rgba(224,160,48,.5); }
 .zb-snaptbl { width:100%; border-collapse:collapse; }
 .zb-snaptbl th, .zb-snaptbl td { text-align:left; padding:5px 10px; font-size:13px;
               border-bottom:1px solid rgba(128,128,128,.14); }

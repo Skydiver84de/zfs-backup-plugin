@@ -4495,16 +4495,23 @@ map_dataset() {
 # VERWALTETEN Snapshots der aktiven (gemappten) Datasets filtern. $1 = Mapper.
 # Schreibt die gefilterten Zeilen unverändert nach stdout.
 filter_managed_snapshot_lines() {
-    local mapper="${1:-cat}" name used refer creation ds snap a
+    local mapper="${1:-cat}" include_inactive="${2:-no}" name used refer creation ds snap a
     local -A active_set=()
-    while read -r a; do
-        [ -n "$a" ] && active_set["$(map_dataset "$mapper" "$a")"]=1
-    done < <(get_datasets)
+    # Bei include_inactive=yes werden auch verwaiste (inaktive) Datasets behalten,
+    # damit deren noch vorhandene Snapshots in der Snapshots-Ansicht sichtbar
+    # bleiben (nur für BASE-begrenzte Ziel-Caches sinnvoll – der Quell-Cache
+    # braucht den Aktiv-Filter, um die lokale Replik mit gleichem Prefix
+    # auszuschließen).
+    if [ "$include_inactive" != "yes" ]; then
+        while read -r a; do
+            [ -n "$a" ] && active_set["$(map_dataset "$mapper" "$a")"]=1
+        done < <(get_datasets)
+    fi
     while IFS=$'\t' read -r name used refer creation; do
         [ -n "$name" ] || continue
         ds="${name%@*}"; snap="${name#*@}"
-        [ -n "${active_set[$ds]:-}" ] || continue
         case "$snap" in "${SNAPSHOT_PREFIX}"*) ;; *) continue ;; esac
+        [ "$include_inactive" = "yes" ] || [ -n "${active_set[$ds]:-}" ] || continue
         printf '%s\t%s\t%s\t%s\n' "$name" "$used" "$refer" "$creation"
     done
 }
@@ -4544,7 +4551,7 @@ write_snapshots_list_cache() {
                 zfs_name_is_safe "$LOCAL_BACKUP_POOL" || continue
                 zfs list -H -p -o name,used,referenced,creation -t snapshot \
                     -r "$LOCAL_BACKUP_POOL" 2>/dev/null \
-                    | filter_managed_snapshot_lines local_target_dataset \
+                    | filter_managed_snapshot_lines local_target_dataset yes \
                     > "$(snapshots_list_cache_file "$tid")"
                 ;;
             remote)
@@ -4559,7 +4566,7 @@ write_snapshots_list_cache() {
                     [ "$REMOTE_READY_HOST" = "$(remote_host_address)" ] || continue
                 fi
                 remote_ssh "zfs list -H -p -o name,used,referenced,creation -t snapshot -r $(shell_quote "$REMOTE_BASE_DATASET") 2>/dev/null" 2>/dev/null \
-                    | filter_managed_snapshot_lines remote_target_dataset \
+                    | filter_managed_snapshot_lines remote_target_dataset yes \
                     > "$(snapshots_list_cache_file "$tid")"
                 ;;
             borg)
@@ -4647,9 +4654,9 @@ snapshot_cache_summary() {
 # kein Live-zfs/SSH. $1 id, $2 label, $3 kind, $4 cache, $5 mapper.
 scope_json() {
     local id="$1" label="$2" kind="$3" cache="$4" mapper="$5"
-    local ds tds dh dd dw dm dy dt du _refer dlatest first=1
+    local ds tds dh dd dw dm dy dt du _refer dlatest first=1 src
     local th=0 td=0 tw=0 tm=0 ty=0 tt=0 tu=0
-    local -A H=() D=() W=() M=() Y=() T=() U=() LR=()
+    local -A H=() D=() W=() M=() Y=() T=() U=() LR=() SEEN=()
 
     # snapshot_cache_summary liefert je Dataset 10 Felder; refer_sum (Feld 9) wird
     # bewusst NICHT aggregiert (referenced-Summe überzählt geteilte Daten). Feld 10
@@ -4666,6 +4673,7 @@ scope_json() {
     while read -r ds; do
         [ -n "$ds" ] || continue
         tds=$(map_dataset "$mapper" "$ds")
+        SEEN[$tds]=1
         dh=${H[$tds]:-0}; dd=${D[$tds]:-0}; dw=${W[$tds]:-0}
         dm=${M[$tds]:-0}; dy=${Y[$tds]:-0}; dt=${T[$tds]:-0}
         # Datasetgröße: ZFS = Summe des exklusiv belegten Platzes (used). borg =
@@ -4678,12 +4686,39 @@ scope_json() {
         [ "$first" -eq 1 ] && first=0 || printf ','
         # "used": ZFS = exklusiv belegter Platz; borg = logische Größe (neuestes
         # Original). KEIN referenced-Summe – das überzählt (Snapshots teilen Daten).
-        printf '{"dataset":"%s","source":"%s","hourly":%s,"daily":%s,"weekly":%s,"monthly":%s,"yearly":%s,"total":%s,"used":%s}' \
+        printf '{"dataset":"%s","source":"%s","hourly":%s,"daily":%s,"weekly":%s,"monthly":%s,"yearly":%s,"total":%s,"used":%s,"orphan":false}' \
             "$(json_escape "$tds")" "$(json_escape "$ds")" \
             "$(json_num "$dh")" "$(json_num "$dd")" "$(json_num "$dw")" \
             "$(json_num "$dm")" "$(json_num "$dy")" "$(json_num "$dt")" \
             "$(json_num "$du")"
     done < <(get_datasets)
+
+    # Verwaiste Datasets: im Cache noch vorhanden (Snapshots existieren physisch),
+    # gehören aber zu keinem aktiven Dataset mehr (aus dem Umfang genommen / Quelle
+    # gelöscht). Weiterhin anzeigen – markiert mit "orphan":true – damit man sie
+    # sieht und aufräumen kann. In den Scope-Summen mitgezählt (physisch vorhanden).
+    for tds in "${!T[@]}"; do
+        [ -n "${SEEN[$tds]:-}" ] && continue
+        dt=${T[$tds]:-0}
+        [ "$dt" -gt 0 ] || continue
+        dh=${H[$tds]:-0}; dd=${D[$tds]:-0}; dw=${W[$tds]:-0}
+        dm=${M[$tds]:-0}; dy=${Y[$tds]:-0}
+        if [ "$kind" = "borg" ]; then du=${LR[$tds]:-0}; else du=${U[$tds]:-0}; fi
+        # Quell-Datasetname zur Anzeige zurückrechnen (Basis abschneiden).
+        case "$kind" in
+            local)  src="${tds#"${LOCAL_BACKUP_POOL}"/}" ;;
+            remote) src="${tds#"${REMOTE_BASE_DATASET}"/}" ;;
+            *)      src="$tds" ;;
+        esac
+        th=$((th+dh)); td=$((td+dd)); tw=$((tw+dw)); tm=$((tm+dm)); ty=$((ty+dy))
+        tt=$((tt+dt)); tu=$((tu+du))
+        [ "$first" -eq 1 ] && first=0 || printf ','
+        printf '{"dataset":"%s","source":"%s","hourly":%s,"daily":%s,"weekly":%s,"monthly":%s,"yearly":%s,"total":%s,"used":%s,"orphan":true}' \
+            "$(json_escape "$tds")" "$(json_escape "$src")" \
+            "$(json_num "$dh")" "$(json_num "$dd")" "$(json_num "$dw")" \
+            "$(json_num "$dm")" "$(json_num "$dy")" "$(json_num "$dt")" \
+            "$(json_num "$du")"
+    done
 
     printf '],"totals":{"hourly":%s,"daily":%s,"weekly":%s,"monthly":%s,"yearly":%s,"total":%s,"used":%s}}' \
         "$(json_num "$th")" "$(json_num "$td")" "$(json_num "$tw")" \

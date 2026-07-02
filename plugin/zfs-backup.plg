@@ -3,8 +3,8 @@
 <!DOCTYPE PLUGIN [
 <!ENTITY name      "zfs-backup">
 <!ENTITY author    "Skydiver84de">
-<!ENTITY version   "2026.07.02.r01">
-<!ENTITY md5       "15ef723cfc217ec18466712f3f2e5407">
+<!ENTITY version   "2026.07.02.r02">
+<!ENTITY md5       "51ada8bfb0a8c457c441eac4bfa27274">
 <!ENTITY plugdir   "/boot/config/plugins/&name;">
 <!ENTITY emhttp    "/usr/local/emhttp/plugins/&name;">
 <!ENTITY giturl    "https://raw.githubusercontent.com/Skydiver84de/zfs-backup-plugin/main">
@@ -30,6 +30,26 @@
 
 <CHANGES>
 <![CDATA[
+
+## 2026.07.02.r02 – Hotfix: Snapshot-Anzeige nach Aufräumen und Ziel-Änderungen
+
+- **Anzeige aktualisiert sich nach dem Aufräumen:** Nach dem Löschen eines
+  verwaisten Datasets auf einem Remote- oder Borg-Ziel blieb das Dataset in der
+  Snapshot-Übersicht stehen, bis man manuell „Live aktualisieren" drückte. Die
+  Ansicht wird jetzt direkt nach dem Aufräumen korrekt neu aufgebaut.
+- **Nicht erreichbare Ziele verschwinden nicht mehr aus der Anzeige:** Wenn ein
+  Ziel gerade nicht erreichbar war (Remote schläft, Borg-Repository offline),
+  konnte eine Aktion wie das Aufräumen auf einem anderen Ziel dessen
+  Snapshot-Anzeige komplett leeren, obwohl die Sicherungen unverändert existieren.
+  Solche Ziele behalten jetzt ihren letzten bekannten Stand, bis sie wieder
+  erreichbar sind.
+- **Korrekte Zuordnung nach Ziel-Änderungen:** Beim Löschen oder Umsortieren von
+  Zielen werden die intern nach Ziel-Nummer benannten Anzeige-Daten sauber
+  verworfen und neu aufgebaut – vorher konnte die Anzeige eines nicht erreichbaren
+  Ziels nach einer Umnummerierung zum falschen Ziel gehören.
+- **Schnellere Verwaisten-Prüfung:** Die Prüfung auf verwaiste Datasets (Wartung,
+  Simulation, Lauf-Ende) arbeitet jetzt deutlich schneller – in der Praxis rund
+  zehnmal so schnell, spürbar besonders bei vielen Datasets.
 
 ## 2026.07.02.r01 – Verwaiste Datasets: Borg, Anzeige und aufgeräumte Meldungen
 

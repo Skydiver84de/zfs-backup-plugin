@@ -801,8 +801,12 @@ target_resequence() {
         TARGETS+=("$i")
     done
 
-    # IDs haben sich geändert -> nach Ziel-ID benannte GUI-Caches verwerfen
-    # (Snapshot-Baum/Listen), damit die GUI mit den neuen IDs neu aufbaut.
+    # IDs haben sich geändert -> die nach Ziel-ID benannten Scope-Caches MÜSSEN
+    # weg (ein alter tgt.N gehörte sonst nach der Umnummerierung zum falschen
+    # Ziel); invalidate_gui_cache baut nur noch neu auf, löscht aber bewusst
+    # nicht mehr (nicht erreichbare Ziele behalten ihren Stand). Daher hier
+    # explizit löschen, dann neu aufbauen.
+    rm -f "${STATE_DIR}"/snapshots_list_cache.tgt.* 2>/dev/null
     invalidate_gui_cache 2>/dev/null
 }
 
@@ -5598,37 +5602,33 @@ send_resume_stream() {
     zfs send -t "$token" 2> >(log_stderr "ZFS Send Resume")
 }
 
+# Aktive Datasets als |-Set, einmal pro Prozess (bzw. Subshell) aus get_datasets
+# aufgebaut. Die Aktiv-Checks unten laufen in den Orphan-Scans PRO Kandidat –
+# jedes Mal frisch get_datasets aufzurufen (= zfs list je Include) machte den
+# Scan quadratisch teuer. INCLUDES/EXCLUDES ändern sich innerhalb eines
+# Prozesses nicht, daher ist das Memo prozessweit gültig.
+ACTIVE_SET_MEMO=""
+ACTIVE_SET_MEMO_READY=0
+active_set_memo_init() {
+    [ "$ACTIVE_SET_MEMO_READY" -eq 1 ] && return 0
+    local ds set="|"
+    while IFS= read -r ds; do
+        [ -n "$ds" ] && set="${set}${ds}|"
+    done < <(get_datasets)
+    ACTIVE_SET_MEMO="$set"
+    ACTIVE_SET_MEMO_READY=1
+}
+
 dataset_is_active_by_name() {
-    local source_ds="$1"
-    local ds
-    local -a active
-
-    # Erst vollständig einlesen, dann prüfen: ein early-return aus
-    # `while read < <(get_datasets)` würde die Pipe schließen, während
-    # get_datasets noch schreibt -> „echo: write error: Broken pipe".
-    mapfile -t active < <(get_datasets)
-    for ds in "${active[@]}"; do
-        [ "$ds" = "$source_ds" ] && return 0
-    done
-
+    active_set_memo_init
+    case "$ACTIVE_SET_MEMO" in *"|${1}|"*) return 0 ;; esac
     return 1
 }
 
 dataset_has_active_descendant() {
-    local source_ds="$1"
-    local ds
-    local -a active
-
-    # Erst vollständig einlesen, dann prüfen – sonst schließt das early-return
-    # die Pipe, während get_datasets noch schreibt („echo: write error: Broken
-    # pipe", vgl. dataset_is_active_by_name).
-    mapfile -t active < <(get_datasets)
-    for ds in "${active[@]}"; do
-        case "$ds" in
-            "${source_ds}/"*) return 0 ;;
-        esac
-    done
-
+    # Ein Eintrag, der mit "<ds>/" beginnt, ist ein aktiver Nachfahre.
+    active_set_memo_init
+    case "$ACTIVE_SET_MEMO" in *"|${1}/"*) return 0 ;; esac
     return 1
 }
 
@@ -9698,6 +9698,7 @@ set_config_option_value() {
             printf -v "$name" "%s" "$value"
             ;;
         array)
+            # shellcheck disable=SC2034  # Nameref: Zuweisungen schreiben auf INCLUDES/EXCLUDES durch
             local -n target_array="$name"
             local item
             if [ "$value" = "-" ]; then

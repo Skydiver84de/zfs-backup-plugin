@@ -109,6 +109,7 @@ VERIFY_WARNINGS=0
 VERIFY_REPAIRS=0
 VERIFY_MISSING=0
 VERIFY_EXTRA=0
+VERIFY_SNAPSHOTS=0   # Anzahl geprüfter (Quell-)Snapshots je Phase – für die Bilanz
 EXISTING_HOURLY=0
 EXISTING_DAILY=0
 EXISTING_WEEKLY=0
@@ -7953,6 +7954,7 @@ verify_local_dataset() {
 
     while read -r snap; do
         name="${snap#*@}"
+        ((VERIFY_SNAPSHOTS++))
         if ! zfs list -t snapshot "${target}@${name}" >/dev/null 2>&1; then
             ((VERIFY_MISSING++))
             if [ "$name" = "$latest" ]; then
@@ -8035,6 +8037,7 @@ verify_remote_dataset() {
 
     while read -r snap; do
         name="${snap#*@}"
+        ((VERIFY_SNAPSHOTS++))
         if ! remote_snapshot_exists "${target}@${name}"; then
             ((VERIFY_MISSING++))
             if [ "$name" = "$latest" ]; then
@@ -8094,6 +8097,7 @@ verify_source_dataset() {
     local snapshot_count
 
     snapshot_count=$(list_backup_snapshots "$ds" | wc -l)
+    [ "$count_stats" = "yes" ] && VERIFY_SNAPSHOTS=$((VERIFY_SNAPSHOTS + snapshot_count))
 
     if [ "$snapshot_count" -eq 0 ]; then
         log "Verify Quelle: keine verwalteten Snapshots: $ds"
@@ -8135,6 +8139,7 @@ verify_source_phase() {
     VERIFY_REPAIRS=0
     VERIFY_MISSING=0
     VERIFY_EXTRA=0
+    VERIFY_SNAPSHOTS=0
 
     if [ "$repair" = "yes" ]; then
         log_phase "Verify Quelle + Reparatur"
@@ -8157,11 +8162,11 @@ verify_source_phase() {
     extra="$VERIFY_EXTRA"
 
     if [ "$errors" -eq 0 ]; then
-        console_success "Verify Quelle abgeschlossen: ${checked} geprüft, ${missing} fehlend, ${extra} extra, ${repairs} repariert, ${warnings} Warnung(en), keine Fehler"
+        console_success "Verify Quelle abgeschlossen: ${checked} Datasets / ${VERIFY_SNAPSHOTS} Snapshots geprüft, ${missing} fehlend, ${extra} extra, ${repairs} repariert, ${warnings} Warnung(en), keine Fehler"
     else
-        console_error "Verify Quelle abgeschlossen: ${checked} geprüft, ${missing} fehlend, ${extra} extra, ${repairs} repariert, ${warnings} Warnung(en), ${errors} Fehler"
+        console_error "Verify Quelle abgeschlossen: ${checked} Datasets / ${VERIFY_SNAPSHOTS} Snapshots geprüft, ${missing} fehlend, ${extra} extra, ${repairs} repariert, ${warnings} Warnung(en), ${errors} Fehler"
     fi
-    log "Verify Quelle: ${checked} geprüft, ${missing} fehlend, ${extra} extra, ${repairs} repariert, ${warnings} Warnung(en), ${errors} Fehler"
+    log "Verify Quelle: ${checked} Datasets / ${VERIFY_SNAPSHOTS} Snapshots geprüft, ${missing} fehlend, ${extra} extra, ${repairs} repariert, ${warnings} Warnung(en), ${errors} Fehler"
 
     return "$errors"
 }
@@ -8199,6 +8204,7 @@ verify_local_phase() {
     VERIFY_REPAIRS=0
     VERIFY_MISSING=0
     VERIFY_EXTRA=0
+    VERIFY_SNAPSHOTS=0
 
     for target_id in "${TARGETS[@]}"; do
         target_enabled "$target_id" || continue
@@ -8224,11 +8230,11 @@ verify_local_phase() {
     missing="$VERIFY_MISSING"
     extra="$VERIFY_EXTRA"
     if [ "$errors" -eq 0 ]; then
-        console_success "Verify Lokal abgeschlossen: ${checked} geprüft, ${missing} fehlend, ${extra} extra, ${repairs} repariert, ${warnings} Warnung(en), keine Fehler"
+        console_success "Verify Lokal abgeschlossen: ${checked} Datasets / ${VERIFY_SNAPSHOTS} Snapshots geprüft, ${missing} fehlend, ${extra} extra, ${repairs} repariert, ${warnings} Warnung(en), keine Fehler"
     else
-        console_error "Verify Lokal abgeschlossen: ${checked} geprüft, ${missing} fehlend, ${extra} extra, ${repairs} repariert, ${warnings} Warnung(en), ${errors} Fehler"
+        console_error "Verify Lokal abgeschlossen: ${checked} Datasets / ${VERIFY_SNAPSHOTS} Snapshots geprüft, ${missing} fehlend, ${extra} extra, ${repairs} repariert, ${warnings} Warnung(en), ${errors} Fehler"
     fi
-    log "Verify Lokal: ${checked} geprüft, ${missing} fehlend, ${extra} extra, ${repairs} repariert, ${warnings} Warnung(en), ${errors} Fehler"
+    log "Verify Lokal: ${checked} Datasets / ${VERIFY_SNAPSHOTS} Snapshots geprüft, ${missing} fehlend, ${extra} extra, ${repairs} repariert, ${warnings} Warnung(en), ${errors} Fehler"
 
     return "$errors"
 }
@@ -8266,6 +8272,7 @@ verify_remote_phase() {
     VERIFY_REPAIRS=0
     VERIFY_MISSING=0
     VERIFY_EXTRA=0
+    VERIFY_SNAPSHOTS=0
 
     for target_id in "${TARGETS[@]}"; do
         target_enabled "$target_id" || continue
@@ -8304,11 +8311,11 @@ verify_remote_phase() {
     missing="$VERIFY_MISSING"
     extra="$VERIFY_EXTRA"
     if [ "$errors" -eq 0 ]; then
-        console_success "Verify Remote abgeschlossen: ${checked} geprüft, ${missing} fehlend, ${extra} extra, ${repairs} repariert, ${warnings} Warnung(en), keine Fehler"
+        console_success "Verify Remote abgeschlossen: ${checked} Datasets / ${VERIFY_SNAPSHOTS} Snapshots geprüft, ${missing} fehlend, ${extra} extra, ${repairs} repariert, ${warnings} Warnung(en), keine Fehler"
     else
-        console_error "Verify Remote abgeschlossen: ${checked} geprüft, ${missing} fehlend, ${extra} extra, ${repairs} repariert, ${warnings} Warnung(en), ${errors} Fehler"
+        console_error "Verify Remote abgeschlossen: ${checked} Datasets / ${VERIFY_SNAPSHOTS} Snapshots geprüft, ${missing} fehlend, ${extra} extra, ${repairs} repariert, ${warnings} Warnung(en), ${errors} Fehler"
     fi
-    log "Verify Remote: ${checked} geprüft, ${missing} fehlend, ${extra} extra, ${repairs} repariert, ${warnings} Warnung(en), ${errors} Fehler"
+    log "Verify Remote: ${checked} Datasets / ${VERIFY_SNAPSHOTS} Snapshots geprüft, ${missing} fehlend, ${extra} extra, ${repairs} repariert, ${warnings} Warnung(en), ${errors} Fehler"
 
     return "$errors"
 }
@@ -8331,6 +8338,7 @@ verify_borg_dataset() {
     while read -r snap; do
         name="${snap#*@}"
         [ -n "$name" ] || continue
+        ((VERIFY_SNAPSHOTS++))
         present="${present}${name}|"
         archive=$(borg_archive_name "$source_ds" "$name")
         if ! borg_archive_exists "$archive"; then
@@ -8381,6 +8389,7 @@ verify_borg_phase() {
     VERIFY_REPAIRS=0
     VERIFY_MISSING=0
     VERIFY_EXTRA=0
+    VERIFY_SNAPSHOTS=0
 
     for target_id in "${TARGETS[@]}"; do
         target_enabled "$target_id" || continue
@@ -8411,11 +8420,11 @@ verify_borg_phase() {
     missing="$VERIFY_MISSING"
     extra="$VERIFY_EXTRA"
     if [ "$errors" -eq 0 ]; then
-        console_success "Verify Borg abgeschlossen: ${checked} geprüft, ${missing} fehlend, ${extra} extra, ${warnings} Warnung(en), keine Fehler"
+        console_success "Verify Borg abgeschlossen: ${checked} Datasets / ${VERIFY_SNAPSHOTS} Snapshots geprüft, ${missing} fehlend, ${extra} extra, ${warnings} Warnung(en), keine Fehler"
     else
-        console_error "Verify Borg abgeschlossen: ${checked} geprüft, ${missing} fehlend, ${extra} extra, ${warnings} Warnung(en), ${errors} Fehler"
+        console_error "Verify Borg abgeschlossen: ${checked} Datasets / ${VERIFY_SNAPSHOTS} Snapshots geprüft, ${missing} fehlend, ${extra} extra, ${warnings} Warnung(en), ${errors} Fehler"
     fi
-    log "Verify Borg: ${checked} geprüft, ${missing} fehlend, ${extra} extra, ${warnings} Warnung(en), ${errors} Fehler"
+    log "Verify Borg: ${checked} Datasets / ${VERIFY_SNAPSHOTS} Snapshots geprüft, ${missing} fehlend, ${extra} extra, ${warnings} Warnung(en), ${errors} Fehler"
 
     return "$errors"
 }

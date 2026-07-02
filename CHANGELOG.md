@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026.07.02.r02 – Hotfix: Snapshot-Anzeige nach Aufräumen und Ziel-Änderungen
+
+- **Anzeige aktualisiert sich nach dem Aufräumen:** Nach dem Löschen eines
+  verwaisten Datasets auf einem Remote- oder Borg-Ziel blieb das Dataset in der
+  Snapshot-Übersicht stehen, bis man manuell „Live aktualisieren" drückte. Die
+  Ansicht wird jetzt direkt nach dem Aufräumen korrekt neu aufgebaut.
+- **Nicht erreichbare Ziele verschwinden nicht mehr aus der Anzeige:** Wenn ein
+  Ziel gerade nicht erreichbar war (Remote schläft, Borg-Repository offline),
+  konnte eine Aktion wie das Aufräumen auf einem anderen Ziel dessen
+  Snapshot-Anzeige komplett leeren, obwohl die Sicherungen unverändert existieren.
+  Solche Ziele behalten jetzt ihren letzten bekannten Stand, bis sie wieder
+  erreichbar sind.
+- **Korrekte Zuordnung nach Ziel-Änderungen:** Beim Löschen oder Umsortieren von
+  Zielen werden die intern nach Ziel-Nummer benannten Anzeige-Daten sauber
+  verworfen und neu aufgebaut – vorher konnte die Anzeige eines nicht erreichbaren
+  Ziels nach einer Umnummerierung zum falschen Ziel gehören.
+- **Schnellere Verwaisten-Prüfung:** Die Prüfung auf verwaiste Datasets (Wartung,
+  Simulation, Lauf-Ende) arbeitet jetzt deutlich schneller – in der Praxis rund
+  zehnmal so schnell, spürbar besonders bei vielen Datasets.
+
 ## 2026.07.02.r01 – Verwaiste Datasets: Borg, Anzeige und aufgeräumte Meldungen
 
 - **Verwaiste Datasets bei Borg-Zielen:** Datasets, die aus dem Sicherungsumfang

@@ -38,7 +38,7 @@ if (!function_exists('zfs_backup_dashboard_tile')) {
         // links/rechts auf dem nativen td-Default lassen (bündig zum Kopf).
         $row = function ($label, $value) {
             return '<tr><td style="padding-top:1px;padding-bottom:1px;border:0">'
-                 . '<span class="grey-text" style="display:inline-block;box-sizing:border-box;min-width:160px;padding-right:8px;white-space:nowrap;vertical-align:top">' . $label . '</span>'
+                 . '<span class="grey-text" style="display:inline-block;box-sizing:border-box;width:160px;padding-right:8px;white-space:normal;vertical-align:top">' . $label . '</span>'
                  . '<span style="display:inline-block;vertical-align:top">' . $value . '</span>'
                  . '</td></tr>';
         };

@@ -4767,10 +4767,15 @@ write_gui_cache() {
 }
 
 invalidate_gui_cache() {
-    rm -f "${STATE_DIR}/datasets_cache.json" "${STATE_DIR}/snapshots_cache.json" \
-          "${STATE_DIR}/capacity_cache.json" "${STATE_DIR}/snapshots_list_cache" \
-          "${STATE_DIR}/snapshot_tree_cache.json" \
-          "${STATE_DIR}"/snapshots_list_cache.tgt.* 2>/dev/null
+    # Früher wurden hier ALLE GUI-Caches gelöscht. Problem: die per-Scope-Snapshot-
+    # Caches der Ziele lassen sich nur neu aufbauen, wenn das Ziel erreichbar ist.
+    # Ein schlafender Remote oder ein offline Borg-Repo verlor so seinen Cache und
+    # verschwand komplett aus der Snapshot-Ansicht, obwohl seine Daten unverändert
+    # existieren (z. B. nach dem Aufräumen eines verwaisten Datasets auf einem
+    # ANDEREN Ziel). Deshalb NEU AUFBAUEN statt löschen: write_gui_cache überschreibt
+    # die erreichbaren Scopes atomar und lässt nicht erreichbare unangetastet
+    # (letzter bekannter Stand bleibt sichtbar, bis das Ziel wieder erreichbar ist).
+    write_gui_cache 2>/dev/null
 }
 
 simulate_snapshot_action() {

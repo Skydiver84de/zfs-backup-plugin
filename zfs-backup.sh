@@ -9720,6 +9720,7 @@ set_config_option_value() {
                         return 1
                     fi
                 done
+                # shellcheck disable=SC2034  # Nameref: schreibt auf INCLUDES/EXCLUDES durch
                 target_array=("${items[@]}")
             fi
             ;;

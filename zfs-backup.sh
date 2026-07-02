@@ -1964,7 +1964,7 @@ Bestand Quelle: $(read_run_stat SOURCE_INVENTORY_TOTAL 0) verwaltet (H $(read_ru
 
 Pruning/Zielabgleich: Quelle $(read_run_stat DELETED 0), Lokal $(read_run_stat LOCAL_DELETED 0), Remote $(read_run_stat REMOTE_DELETED 0)${borg_prune} entfernt
 ${orphan_line:+$orphan_line
-}Ziele je Ziel (übertragen / aktuell bzw. vorhanden / Fehler):
+}Replikation je Ziel:
 ${target_balance}
 
 Speicher: Quelle $(format_bytes "$(read_run_stat SOURCE_SNAPSHOT_USED 0)"), Lokal $(format_bytes "$(read_run_stat LOCAL_SNAPSHOT_USED 0)"), Remote $(format_bytes "$(read_run_stat REMOTE_SNAPSHOT_USED 0)")
@@ -5706,7 +5706,7 @@ run_local_replication() {
     console_info "Snapshot-Bestand Lokal: ${inv_total} verwaltete Snapshots (Hourly ${inv_h}, Daily ${inv_d}, Weekly ${inv_w}, Monthly ${inv_m}, Yearly ${inv_y})"
     # Bilanz auch ins Logfile (sichtbar selbst wenn nichts zu tun war).
     log "Lokale Replikation ${CURRENT_TARGET_LABEL}: $((REPLICATION_FULL-b_full)) Full, $((REPLICATION_INCREMENTAL-b_inc)) inkrementell, $((REPLICATION_RESUMED-b_res)) fortgesetzt, $((REPLICATION_SKIPPED-b_skip)) aktuell, $((REPLICATION_ERRORS-b_err)) Fehler"
-    append_target_balance "${CURRENT_TARGET_LABEL} (lokal): $(( (REPLICATION_FULL-b_full)+(REPLICATION_INCREMENTAL-b_inc)+(REPLICATION_RESUMED-b_res) )) übertragen, $((REPLICATION_SKIPPED-b_skip)) aktuell, $((REPLICATION_ERRORS-b_err)) Fehler"
+    append_target_balance "${CURRENT_TARGET_LABEL} (lokal): $(( (REPLICATION_FULL-b_full)+(REPLICATION_INCREMENTAL-b_inc)+(REPLICATION_RESUMED-b_res) )) Datasets übertragen, $((REPLICATION_SKIPPED-b_skip)) aktuell, $((REPLICATION_ERRORS-b_err)) Fehler"
 }
 
 run_target_replication() {
@@ -6478,7 +6478,7 @@ run_remote_replication() {
     console_info "Snapshot-Bestand Remote: ${inv_total} verwaltete Snapshots (Hourly ${inv_h}, Daily ${inv_d}, Weekly ${inv_w}, Monthly ${inv_m}, Yearly ${inv_y})"
     # Bilanz auch ins Logfile (sichtbar selbst wenn nichts zu tun war).
     log "Remote-Replikation ${CURRENT_TARGET_LABEL}: $((REMOTE_REPLICATION_FULL-b_full)) Full, $((REMOTE_REPLICATION_INCREMENTAL-b_inc)) inkrementell, $((REMOTE_REPLICATION_RESUMED-b_res)) fortgesetzt, $((REMOTE_REPLICATION_SKIPPED-b_skip)) aktuell, $((REMOTE_REPLICATION_ERRORS-b_err)) Fehler"
-    append_target_balance "${CURRENT_TARGET_LABEL} (remote): $(( (REMOTE_REPLICATION_FULL-b_full)+(REMOTE_REPLICATION_INCREMENTAL-b_inc)+(REMOTE_REPLICATION_RESUMED-b_res) )) übertragen, $((REMOTE_REPLICATION_SKIPPED-b_skip)) aktuell, $((REMOTE_REPLICATION_ERRORS-b_err)) Fehler"
+    append_target_balance "${CURRENT_TARGET_LABEL} (remote): $(( (REMOTE_REPLICATION_FULL-b_full)+(REMOTE_REPLICATION_INCREMENTAL-b_inc)+(REMOTE_REPLICATION_RESUMED-b_res) )) Datasets übertragen, $((REMOTE_REPLICATION_SKIPPED-b_skip)) aktuell, $((REMOTE_REPLICATION_ERRORS-b_err)) Fehler"
 }
 
 # Run-Phase: verwaiste Ziel-Datasets nur ERKENNEN und LOGGEN, NIEMALS automatisch
@@ -7377,7 +7377,7 @@ run_borg_replication() {
     console_info "Archive: ${BORG_CREATED_ARCHIVES} neu erstellt"
     # Bilanz auch ins Logfile (sichtbar selbst wenn nichts erstellt wurde).
     log "Borg-Replikation ${CURRENT_TARGET_LABEL}: $((BORG_CREATED_ARCHIVES-before_created)) neu, $((BORG_SKIPPED_ARCHIVES-before_skipped)) bereits vorhanden, $((BORG_REPLICATION_ERRORS-before_errors)) Fehler"
-    append_target_balance "${CURRENT_TARGET_LABEL} (borg): $((BORG_CREATED_ARCHIVES-before_created)) übertragen, $((BORG_SKIPPED_ARCHIVES-before_skipped)) vorhanden, $((BORG_REPLICATION_ERRORS-before_errors)) Fehler"
+    append_target_balance "${CURRENT_TARGET_LABEL} (borg): $((BORG_CREATED_ARCHIVES-before_created)) Archive übertragen, $((BORG_SKIPPED_ARCHIVES-before_skipped)) vorhanden, $((BORG_REPLICATION_ERRORS-before_errors)) Fehler"
 }
 
 # Borg-Zielabgleich: löscht je Dataset die Archive im eigenen Namespace

@@ -1940,6 +1940,15 @@ build_notify_message() {
         borg_prune=", Borg $(read_run_stat BORG_DELETED 0)"
     fi
 
+    # Speicher: die ZFS-Ziele zeigen Snapshot-used, borg die deduplizierte
+    # Repo-Größe (andere Metrik) – daher separat gekennzeichnet und nur, wenn ein
+    # borg-Ziel diesen Lauf erreichbar war (BORG_REPO_USED gesetzt).
+    local storage_borg="" bru
+    if [ "$(target_enabled_count borg)" -gt 0 ]; then
+        bru=$(read_run_stat BORG_REPO_USED "")
+        [ -n "$bru" ] && storage_borg=", Borg $(format_bytes "$bru") (dedupl. Repo)"
+    fi
+
     # Verwaiste Datasets NUR erwähnen, wenn welche gefunden wurden – kompakt und als
     # Teil dieser Lauf-Meldung. Keine separate Notification mehr (war redundant, kam
     # bei bestehenden Verwaisten bei jedem Lauf zusätzlich).
@@ -1967,7 +1976,7 @@ ${orphan_line:+$orphan_line
 }Replikation je Ziel:
 ${target_balance}
 
-Speicher: Quelle $(format_bytes "$(read_run_stat SOURCE_SNAPSHOT_USED 0)"), Lokal $(format_bytes "$(read_run_stat LOCAL_SNAPSHOT_USED 0)"), Remote $(format_bytes "$(read_run_stat REMOTE_SNAPSHOT_USED 0)")
+Speicher (ZFS-Snapshots): Quelle $(format_bytes "$(read_run_stat SOURCE_SNAPSHOT_USED 0)"), Lokal $(format_bytes "$(read_run_stat LOCAL_SNAPSHOT_USED 0)"), Remote $(format_bytes "$(read_run_stat REMOTE_SNAPSHOT_USED 0)")${storage_borg}
 EOF
 
     if [ "$include_error" = "yes" ]; then
@@ -7595,6 +7604,25 @@ borg_repo_used_bytes() {
         | head -n1
 }
 
+# Summiert die deduplizierte Repo-Größe (unique_csize) über alle aktiven, in
+# diesem Lauf erreichbaren borg-Ziele. Bewusst eine ANDERE Metrik als der
+# ZFS-Snapshot-used der ZFS-Ziele (ganzes Repo dedupliziert statt Snapshot-Platz)
+# – in den Ausgaben daher separat gekennzeichnet. Gibt nichts aus, wenn kein
+# borg-Ziel erreichbar war (dann keine borg-Speicherzeile).
+borg_total_repo_used_bytes() {
+    local tid used total="" any=0
+    for tid in "${TARGETS[@]}"; do
+        target_enabled "$tid" || continue
+        [ "$(target_type "$tid")" = "borg" ] || continue
+        load_target_context "$tid" || continue
+        { [ "$BORG_READY" -eq 1 ] && [ "$BORG_READY_REPO" = "$BORG_REPO" ]; } || continue
+        used=$(borg_repo_used_bytes) || continue
+        [ -n "$used" ] || continue
+        total=$(( ${total:-0} + used )); any=1
+    done
+    [ "$any" -eq 1 ] && printf '%s' "$total"
+}
+
 # Gesamt-/freie Kapazität des Dateisystems, auf dem das Repo liegt – in Bytes,
 # als "<total><TAB><frei>". borg selbst kennt das nicht; wir holen es per `df -m`
 # über DIESELBE SSH-Verbindung wie borg (nur ssh://-Repos). Hetzner Storage Box
@@ -9735,6 +9763,7 @@ show_run_summary() {
     local local_snapshot_used
     local remote_snapshot_count
     local remote_snapshot_used
+    local borg_repo_used=""
     local inv_h
     local inv_d
     local inv_w
@@ -9765,6 +9794,8 @@ show_run_summary() {
     read -r local_inv_h local_inv_d local_inv_w local_inv_m local_inv_y local_inv_total < <(target_snapshot_inventory_for_type local)
     read -r remote_snapshot_count remote_snapshot_used < <(target_snapshot_stats_for_type remote)
     read -r remote_inv_h remote_inv_d remote_inv_w remote_inv_m remote_inv_y remote_inv_total < <(target_snapshot_inventory_for_type remote)
+    # borg: deduplizierte Repo-Größe (eigene Metrik, siehe borg_total_repo_used_bytes)
+    borg_repo_used=$(borg_total_repo_used_bytes)
 
     console_clear_status
 
@@ -9785,12 +9816,15 @@ Pruning       ${DELETED_SNAPSHOTS} Quelle, ${LOCAL_DELETED_SNAPSHOTS} lokal, ${R
 Lokal         ${REPLICATION_FULL} Full, ${REPLICATION_INCREMENTAL} inkrementell, ${REPLICATION_RESUMED} fortgesetzt, ${REPLICATION_SKIPPED} aktuell, ${REPLICATION_ERRORS} Fehler
 Remote        ${REMOTE_REPLICATION_FULL} Full, ${REMOTE_REPLICATION_INCREMENTAL} inkrementell, ${REMOTE_REPLICATION_RESUMED} fortgesetzt, ${REMOTE_REPLICATION_SKIPPED} aktuell, ${REMOTE_REPLICATION_ERRORS} Fehler
 
-Snapshot-Speicher
+Snapshot-Speicher (ZFS-Snapshots, belegter Platz)
   Quelle       ${source_snapshot_count} Snapshots, $(format_bytes "$source_snapshot_used") used
   Lokal        ${local_snapshot_count} Snapshots, $(format_bytes "$local_snapshot_used") used
   Remote       ${remote_snapshot_count} Snapshots, $(format_bytes "$remote_snapshot_used") used
-
 EOF
+    # borg getrennt ausweisen: andere Metrik (dedupliziertes ganzes Repo, nicht
+    # Snapshot-used). Nur wenn ein borg-Ziel diesen Lauf erreichbar war.
+    [ -n "$borg_repo_used" ] && printf '  Borg-Repo    %s belegt (dedupliziert, ganzes Repo)\n' "$(format_bytes "$borg_repo_used")"
+    echo
 
     cat > "${STATE_DIR}/last_run_stats" <<EOF
 LAST_RUN=$(date '+%d.%m.%Y %H:%M:%S')
@@ -9832,6 +9866,7 @@ LOCAL_SNAPSHOT_COUNT=${local_snapshot_count}
 LOCAL_SNAPSHOT_USED=${local_snapshot_used}
 REMOTE_SNAPSHOT_COUNT=${remote_snapshot_count}
 REMOTE_SNAPSHOT_USED=${remote_snapshot_used}
+BORG_REPO_USED=${borg_repo_used:-}
 RUNTIME_SECONDS=${runtime}
 REPLICATION_FULL=${REPLICATION_FULL}
 REPLICATION_INCREMENTAL=${REPLICATION_INCREMENTAL}

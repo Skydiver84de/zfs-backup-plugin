@@ -6707,6 +6707,16 @@ maintenance_cleanup_orphans() {
                     if ! assert_safe_remote_target_dataset "$source_ds" "$target"; then
                         echo "FEHLER: unsicheres Ziel übersprungen: ${REMOTE_HOST}:${target}" >&2; continue
                     fi
+                    # WICHTIG: ensure_remote_ready hier im ELTERNprozess. Die
+                    # Orphan-Liste oben läuft in einer Prozesssubstitution – das
+                    # dortige ensure_remote_ready setzt REMOTE_READY nur in der
+                    # Subshell. Ohne das Flag im Elternprozess würde der Cache-
+                    # Neuaufbau nach dem Löschen (invalidate_gui_cache ->
+                    # write_snapshots_list_cache) das Remote-Ziel überspringen und
+                    # die GUI zeigte das gelöschte Dataset weiter an.
+                    if ! ensure_remote_ready >/dev/null 2>&1; then
+                        echo "FEHLER: Remote nicht erreichbar, übersprungen: ${REMOTE_HOST}:${target}" >&2; continue
+                    fi
                     if remote_destroy_dataset_recursive "$target"; then
                         deleted=$((deleted+1)); log "Orphan gelöscht: ${REMOTE_HOST}:${target}"
                         printf 'GELÖSCHT  %s:%s\n' "$REMOTE_HOST" "$target"
@@ -6720,6 +6730,11 @@ maintenance_cleanup_orphans() {
                     if ! borg_ensure_binary >/dev/null 2>&1 || ! borg_run info >/dev/null 2>&1; then
                         echo "FEHLER: Borg-Repo nicht erreichbar, übersprungen: $BORG_REPO" >&2; continue
                     fi
+                    # Repo erreichbar -> im ELTERNprozess markieren, damit der
+                    # Cache-Neuaufbau nach dem Löschen das borg-Ziel einschließt
+                    # (analog zum Remote-Fall oben).
+                    BORG_READY=1
+                    BORG_READY_REPO="$BORG_REPO"
                     borg_load_existing_archives
                     local bprefix barch bn=0
                     bprefix="$(borg_dataset_prefix "$source_ds")"

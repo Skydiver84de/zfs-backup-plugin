@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026.07.02.r03 – Snapshots prüfen: geprüfte Snapshot-Anzahl anzeigen
+
+- **Snapshot-Anzahl im Prüfergebnis:** „Snapshots prüfen" (Wartung) vergleicht
+  schon immer jeden einzelnen Snapshot mit dem Ziel; das Ergebnis nannte aber nur
+  die Anzahl der Datasets. Es zeigt jetzt zusätzlich, wie viele Snapshots geprüft
+  wurden – z. B. „23 Datasets / 428 Snapshots geprüft" – für Quelle, lokales,
+  Remote- und Borg-Ziel.
+
 ## 2026.07.02.r02 – Hotfix: Snapshot-Anzeige nach Aufräumen und Ziel-Änderungen
 
 - **Anzeige aktualisiert sich nach dem Aufräumen:** Nach dem Löschen eines

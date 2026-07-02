@@ -1,6 +1,10 @@
 # Roadmap
 
-## In Arbeit: Zieltyp `borg` (entferntes Borg-Repository als Offsite-Ziel)
+## Abgeschlossen: Zieltyp `borg` (entferntes Borg-Repository als Offsite-Ziel)
+
+> **Ausgeliefert** ab `2026.06.25.r01` (Folge-Releases bis `2026.06.26.r03`).
+> Doku (README-Abschnitt „Borg-Ziel") und CHANGELOG sind gepflegt; nichts mehr
+> offen. Der Abschnitt bleibt als Referenz zur Umsetzung stehen.
 
 **Stand:** Engine + CLI + Config sind in `zfs-backup.sh` implementiert (Zieltyp
 `borg`: `--add-target <label> borg <repo-url>`, `--edit-target … REPO/PASSPHRASE/
@@ -11,10 +15,9 @@ verwaltetem Snapshot aus `<mountpoint>/.zfs/snapshot/<snap>`), Zielabgleich
 des Datasets. Passphrase liegt als Config-Feld (conf bleibt 600). Ein gemeinsames
 Repo hält mehrere Datasets namespaced (Wiederverwendung des bestehenden Repos).
 
-**Noch offen:**
-* **Docs/CHANGELOG** beim Release.
-
 **Erledigt:**
+* **Docs/CHANGELOG:** README-Abschnitt „Borg-Ziel" und CHANGELOG-Einträge
+  (ab `2026.06.25.r01`) gepflegt.
 * **GUI-Datei-Browser + Einzeldatei-Restore für borg-Archive:** der Datei-Browser
   (`--snapshot-ls`/`--snapshot-cat`) unterstützt jetzt borg-Ziele – Auflisten je
   Verzeichnisebene über `borg list ::archiv <pfad>` (auf direkte Kinder gefiltert,

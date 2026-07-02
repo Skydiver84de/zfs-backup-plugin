@@ -4654,9 +4654,9 @@ snapshot_cache_summary() {
 # kein Live-zfs/SSH. $1 id, $2 label, $3 kind, $4 cache, $5 mapper.
 scope_json() {
     local id="$1" label="$2" kind="$3" cache="$4" mapper="$5"
-    local ds tds dh dd dw dm dy dt du _refer dlatest first=1 src
+    local ds tds dh dd dw dm dy dt du _refer dlatest first=1 src orphan_json
     local th=0 td=0 tw=0 tm=0 ty=0 tt=0 tu=0
-    local -A H=() D=() W=() M=() Y=() T=() U=() LR=() SEEN=()
+    local -A H=() D=() W=() M=() Y=() T=() U=() LR=() SRC=() ORPH=()
 
     # snapshot_cache_summary liefert je Dataset 10 Felder; refer_sum (Feld 9) wird
     # bewusst NICHT aggregiert (referenced-Summe überzählt geteilte Daten). Feld 10
@@ -4670,10 +4670,32 @@ scope_json() {
     printf '{"id":"%s","label":"%s","kind":"%s","datasets":[' \
         "$(json_escape "$id")" "$(json_escape "$label")" "$(json_escape "$kind")"
 
+    # Anzuzeigende Datasets sammeln: aktive (aus get_datasets, auf Ziel-Dataset
+    # gemappt) und verwaiste (im Cache noch vorhanden, aber zu keinem aktiven
+    # Dataset mehr gehörend – aus dem Umfang genommen / Quelle gelöscht). Verwaiste
+    # bleiben sichtbar (markiert mit "orphan":true), damit man sie sieht und
+    # aufräumen kann. Ausgabe danach ALPHABETISCH nach Anzeigename (tds), aktive und
+    # verwaiste gemischt – nicht Orphans hinten angehängt.
     while read -r ds; do
         [ -n "$ds" ] || continue
         tds=$(map_dataset "$mapper" "$ds")
-        SEEN[$tds]=1
+        SRC[$tds]="$ds"; ORPH[$tds]=0
+    done < <(get_datasets)
+    for tds in "${!T[@]}"; do
+        [ -n "${SRC[$tds]:-}" ] && continue          # schon als aktiv erfasst
+        [ "${T[$tds]:-0}" -gt 0 ] || continue        # nur mit vorhandenem Bestand
+        # Quell-Datasetname zur Anzeige zurückrechnen (Basis abschneiden).
+        case "$kind" in
+            local)  src="${tds#"${LOCAL_BACKUP_POOL}"/}" ;;
+            remote) src="${tds#"${REMOTE_BASE_DATASET}"/}" ;;
+            *)      src="$tds" ;;
+        esac
+        SRC[$tds]="$src"; ORPH[$tds]=1
+    done
+
+    while IFS= read -r tds; do
+        [ -n "$tds" ] || continue
+        ds="${SRC[$tds]}"
         dh=${H[$tds]:-0}; dd=${D[$tds]:-0}; dw=${W[$tds]:-0}
         dm=${M[$tds]:-0}; dy=${Y[$tds]:-0}; dt=${T[$tds]:-0}
         # Datasetgröße: ZFS = Summe des exklusiv belegten Platzes (used). borg =
@@ -4684,41 +4706,15 @@ scope_json() {
         th=$((th+dh)); td=$((td+dd)); tw=$((tw+dw)); tm=$((tm+dm)); ty=$((ty+dy))
         tt=$((tt+dt)); tu=$((tu+du))
         [ "$first" -eq 1 ] && first=0 || printf ','
+        orphan_json=false; [ "${ORPH[$tds]}" = "1" ] && orphan_json=true
         # "used": ZFS = exklusiv belegter Platz; borg = logische Größe (neuestes
         # Original). KEIN referenced-Summe – das überzählt (Snapshots teilen Daten).
-        printf '{"dataset":"%s","source":"%s","hourly":%s,"daily":%s,"weekly":%s,"monthly":%s,"yearly":%s,"total":%s,"used":%s,"orphan":false}' \
+        printf '{"dataset":"%s","source":"%s","hourly":%s,"daily":%s,"weekly":%s,"monthly":%s,"yearly":%s,"total":%s,"used":%s,"orphan":%s}' \
             "$(json_escape "$tds")" "$(json_escape "$ds")" \
             "$(json_num "$dh")" "$(json_num "$dd")" "$(json_num "$dw")" \
             "$(json_num "$dm")" "$(json_num "$dy")" "$(json_num "$dt")" \
-            "$(json_num "$du")"
-    done < <(get_datasets)
-
-    # Verwaiste Datasets: im Cache noch vorhanden (Snapshots existieren physisch),
-    # gehören aber zu keinem aktiven Dataset mehr (aus dem Umfang genommen / Quelle
-    # gelöscht). Weiterhin anzeigen – markiert mit "orphan":true – damit man sie
-    # sieht und aufräumen kann. In den Scope-Summen mitgezählt (physisch vorhanden).
-    for tds in "${!T[@]}"; do
-        [ -n "${SEEN[$tds]:-}" ] && continue
-        dt=${T[$tds]:-0}
-        [ "$dt" -gt 0 ] || continue
-        dh=${H[$tds]:-0}; dd=${D[$tds]:-0}; dw=${W[$tds]:-0}
-        dm=${M[$tds]:-0}; dy=${Y[$tds]:-0}
-        if [ "$kind" = "borg" ]; then du=${LR[$tds]:-0}; else du=${U[$tds]:-0}; fi
-        # Quell-Datasetname zur Anzeige zurückrechnen (Basis abschneiden).
-        case "$kind" in
-            local)  src="${tds#"${LOCAL_BACKUP_POOL}"/}" ;;
-            remote) src="${tds#"${REMOTE_BASE_DATASET}"/}" ;;
-            *)      src="$tds" ;;
-        esac
-        th=$((th+dh)); td=$((td+dd)); tw=$((tw+dw)); tm=$((tm+dm)); ty=$((ty+dy))
-        tt=$((tt+dt)); tu=$((tu+du))
-        [ "$first" -eq 1 ] && first=0 || printf ','
-        printf '{"dataset":"%s","source":"%s","hourly":%s,"daily":%s,"weekly":%s,"monthly":%s,"yearly":%s,"total":%s,"used":%s,"orphan":true}' \
-            "$(json_escape "$tds")" "$(json_escape "$src")" \
-            "$(json_num "$dh")" "$(json_num "$dd")" "$(json_num "$dw")" \
-            "$(json_num "$dm")" "$(json_num "$dy")" "$(json_num "$dt")" \
-            "$(json_num "$du")"
-    done
+            "$(json_num "$du")" "$orphan_json"
+    done < <(printf '%s\n' "${!SRC[@]}" | LC_ALL=C sort)
 
     printf '],"totals":{"hourly":%s,"daily":%s,"weekly":%s,"monthly":%s,"yearly":%s,"total":%s,"used":%s}}' \
         "$(json_num "$th")" "$(json_num "$td")" "$(json_num "$tw")" \

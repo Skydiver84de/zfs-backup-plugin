@@ -9862,11 +9862,15 @@ EOF
     # Kompakte Bilanz ins Logfile (die ausführliche Statistik oben geht nur auf
     # stdout). So endet das Log immer mit einer Zusammenfassung – auch wenn nichts
     # zu tun war und sieht man nicht ratlos vor leeren Phasen-Abschnitten.
-    local borg_part=""
-    if [ "$(target_enabled_count borg)" -gt 0 ]; then
-        borg_part=", Borg ${BORG_CREATED_ARCHIVES} neu/${BORG_DELETED_ARCHIVES} entfernt"
-    fi
-    log "Zusammenfassung: ${result} – ${created_total} Snapshots neu, Pruning ${DELETED_SNAPSHOTS}/${LOCAL_DELETED_SNAPSHOTS}/${REMOTE_DELETED_SNAPSHOTS} (Quelle/lokal/remote)${borg_part}, Laufzeit ${runtime}s"
+    # Pruning (Quelle, retention-basiert) + Zielabgleich (Ziele spiegeln die
+    # Quelle) als eine konsistent beschriftete Bilanz – gleiche Vokabel wie die
+    # Detailzeile in run_pruning. Ziel-Typen nur zeigen, wenn konfiguriert
+    # (eine 0 bei fehlendem Ziel suggerierte sonst „nichts zu entfernen").
+    local prune_bilanz="Quelle ${DELETED_SNAPSHOTS}"
+    [ "$(target_enabled_count local)"  -gt 0 ] && prune_bilanz="${prune_bilanz}, Lokal ${LOCAL_DELETED_SNAPSHOTS}"
+    [ "$(target_enabled_count remote)" -gt 0 ] && prune_bilanz="${prune_bilanz}, Remote ${REMOTE_DELETED_SNAPSHOTS}"
+    [ "$(target_enabled_count borg)"   -gt 0 ] && prune_bilanz="${prune_bilanz}, Borg ${BORG_DELETED_ARCHIVES}"
+    log "Zusammenfassung: ${result} – ${created_total} Snapshots neu, Pruning/Zielabgleich (${prune_bilanz}), Laufzeit ${runtime}s"
 
     # GUI-Cache (Datasets/Snapshots) für die Snapshots-Seite mitschreiben –
     # Platten sind jetzt ohnehin warm, das Anschauen weckt später keine mehr.

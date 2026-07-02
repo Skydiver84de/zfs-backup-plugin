@@ -3870,6 +3870,14 @@ resolve_snapshot_browse() {
             type=$(target_type "$scope")
             case "$type" in
                 local)
+                    # Replikate werden per receive -u ungemountet empfangen; ein
+                    # (z. B. verwaistes) ungemountetes Ziel-Dataset hätte sonst kein
+                    # .zfs/snapshot -> leeres Listing. Bei Bedarf mounten – bleibt
+                    # gemountet wie die aktiven Replikate auch (remote mountet analog
+                    # in remote_snapshot_exec).
+                    if [ "$(zfs get -H -o value mounted "$ds" 2>/dev/null)" = "no" ]; then
+                        zfs mount "$ds" >/dev/null 2>&1
+                    fi
                     BROWSE_ROOT=$(local_snapshot_root "$ds" "$snap") || return 1
                     BROWSE_MODE="local" ;;
                 remote)

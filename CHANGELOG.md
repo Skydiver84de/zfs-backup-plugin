@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026.07.02.r01 – Verwaiste Datasets: Borg, Anzeige und aufgeräumte Meldungen
+
+- **Verwaiste Datasets bei Borg-Zielen:** Datasets, die aus dem Sicherungsumfang
+  gefallen sind (Quell-Dataset gelöscht oder abgewählt), werden jetzt auch für
+  Borg-Ziele erkannt, gemeldet und lassen sich über die Wartung aufräumen – bisher
+  galt das nur für lokale und Remote-Ziele.
+- **Verwaiste Datasets bleiben sichtbar:** In der Snapshot-Übersicht werden solche
+  Datasets weiterhin angezeigt – farblich markiert mit dem Hinweis „verwaist" und
+  alphabetisch an ihrer Stelle einsortiert – statt ausgeblendet zu werden. So sieht
+  man auf einen Blick, wo noch alte Sicherungen liegen, und kann sie durchsuchen
+  oder gezielt aufräumen.
+- **Inhalt verwaister Datasets auch beim lokalen Ziel durchsuchbar:** Ein lokales
+  Sicherungsziel, das gerade nicht eingehängt ist, wird fürs Durchsuchen nun bei
+  Bedarf automatisch eingehängt – vorher blieb das Verzeichnis dort leer (bei
+  Remote- und Borg-Zielen funktionierte es bereits).
+- **Nur noch eine Lauf-Meldung:** Verwaiste Datasets stehen jetzt kurz in der
+  normalen Erfolgs- bzw. Fehlermeldung, statt zusätzlich als eigene
+  Benachrichtigung zu kommen (die bei vorhandenen Verwaisten bei jedem Lauf
+  erschien). Die separate Verwaist-Benachrichtigung samt zugehöriger Einstellung
+  entfällt.
+- **Klarere Benachrichtigung:** Die Bilanz je Ziel ist nun einheitlich auf Datasets
+  bezogen – auch bei Borg, mit der Archivzahl als Zusatz –, sodass die Ziele
+  vergleichbar sind. Zusätzlich weist die Meldung die belegte Borg-Repository-Größe
+  aus (dedupliziert und eigens gekennzeichnet, da eine andere Größe als der
+  Snapshot-Speicher der ZFS-Ziele).
+- **Dashboard-Kachel:** Die Zeile „Verwaiste Datasets / Snapshots" bricht bei Bedarf
+  sauber um, statt sich mit dem Wert zu überschneiden.
+
 ## 2026.06.26.r03 – Borg-Anzeige und Benachrichtigung je Ziel
 
 - **Borg bei „Aktive Ziele":** Borg-Ziele werden jetzt auf der Statusseite und im

@@ -84,6 +84,12 @@ BORG_REPLICATION_ERRORS=0
 BORG_DELETED_ARCHIVES=0
 BORG_CREATED_ARCHIVES=0
 BORG_SKIPPED_ARCHIVES=0
+# Dataset-basierte Bilanz (parallel zu local/remote): borg arbeitet zwar auf
+# Archiv-Ebene (ein Archiv je Snapshot), sichert aber dieselben Datasets. Für die
+# Meldung je Ziel zählen wir daher auch Datasets: mit >=1 neuem Archiv = übertragen,
+# sonst = aktuell. Fehler zählt bereits BORG_REPLICATION_ERRORS je Dataset.
+BORG_DATASETS_TRANSFERRED=0
+BORG_DATASETS_CURRENT=0
 BORG_EXISTING_ARCHIVES="|"
 # Neuversuche je Archiv bei (oft transientem) borg-create-Fehler – z. B.
 # DSL-Zwangstrennung mitten in einem großen Archiv. borg setzt dank Checkpoint am
@@ -7230,6 +7236,7 @@ replicate_dataset_borg() {
     local ds="$1"
     local snap name archive root rc _bsz _bo _bd _btotal src mnt
     local did_fail=0
+    local ds_before_created="$BORG_CREATED_ARCHIVES"
 
     while IFS= read -r snap; do
         name="${snap#*@}"
@@ -7318,16 +7325,22 @@ replicate_dataset_borg() {
         ((BORG_REPLICATION_ERRORS++))
         ((RUN_ERRORS++))
         mark_borg_replication_failed "$ds"
+    elif [ "$BORG_CREATED_ARCHIVES" -gt "$ds_before_created" ]; then
+        ((BORG_DATASETS_TRANSFERRED++))   # Dataset mit >=1 neuem Archiv
+    else
+        ((BORG_DATASETS_CURRENT++))       # Dataset bereits vollständig gesichert
     fi
 }
 
 run_borg_replication() {
     local ds index=0 total
     local -a datasets
-    local before_created before_skipped before_errors
+    local before_created before_skipped before_errors before_ds_transferred before_ds_current
     before_created="$BORG_CREATED_ARCHIVES"
     before_skipped="$BORG_SKIPPED_ARCHIVES"
     before_errors="$BORG_REPLICATION_ERRORS"
+    before_ds_transferred="$BORG_DATASETS_TRANSFERRED"
+    before_ds_current="$BORG_DATASETS_CURRENT"
 
     [ "$ENABLE_BORG_REPLICATION" = "yes" ] || return
 
@@ -7386,7 +7399,9 @@ run_borg_replication() {
     console_info "Archive: ${BORG_CREATED_ARCHIVES} neu erstellt"
     # Bilanz auch ins Logfile (sichtbar selbst wenn nichts erstellt wurde).
     log "Borg-Replikation ${CURRENT_TARGET_LABEL}: $((BORG_CREATED_ARCHIVES-before_created)) neu, $((BORG_SKIPPED_ARCHIVES-before_skipped)) bereits vorhanden, $((BORG_REPLICATION_ERRORS-before_errors)) Fehler"
-    append_target_balance "${CURRENT_TARGET_LABEL} (borg): $((BORG_CREATED_ARCHIVES-before_created)) Archive übertragen, $((BORG_SKIPPED_ARCHIVES-before_skipped)) vorhanden, $((BORG_REPLICATION_ERRORS-before_errors)) Fehler"
+    # Dataset-parallel zu local/remote (borg hat notgedrungen keine Ziel-Datasets,
+    # sichert aber dieselben Datasets); Archiv-Anzahl als Detail dahinter.
+    append_target_balance "${CURRENT_TARGET_LABEL} (borg): $((BORG_DATASETS_TRANSFERRED-before_ds_transferred)) Datasets übertragen, $((BORG_DATASETS_CURRENT-before_ds_current)) aktuell, $((BORG_REPLICATION_ERRORS-before_errors)) Fehler ($((BORG_CREATED_ARCHIVES-before_created)) Archive neu)"
 }
 
 # Borg-Zielabgleich: löscht je Dataset die Archive im eigenen Namespace

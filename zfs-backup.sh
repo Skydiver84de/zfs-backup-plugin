@@ -5066,11 +5066,12 @@ simulate_orphan_datasets() {
         fi
     fi
 
-    # Ziele (lokal + remote; borg hat keine Ziel-Datasets).
+    # Ziele: lokal/remote haben Ziel-Datasets, borg Archive im Quell-Namensraum
+    # (verwaist = inaktives Quell-Dataset mit verbliebenen verwalteten Archiven).
     for target_id in "${TARGETS[@]}"; do
         target_enabled "$target_id" || continue
         type=$(target_type "$target_id")
-        case "$type" in local|remote) ;; *) continue ;; esac
+        case "$type" in local|remote|borg) ;; *) continue ;; esac
         load_target_context "$target_id" || continue
 
         case "$SIM_UNREACHABLE_IDS" in
@@ -5080,7 +5081,9 @@ simulate_orphan_datasets() {
         esac
         [ "$type" = "local" ] && { zfs list "$LOCAL_BACKUP_POOL" >/dev/null 2>&1 || continue; }
 
-        sim_orphan_section "$(target_label "$target_id") [$type]" "verwaiste Ziel-Dataset(s)" \
+        local desc="verwaiste Ziel-Dataset(s)"
+        [ "$type" = "borg" ] && desc="inaktive(s) Dataset(s) mit verbliebenen Archiven"
+        sim_orphan_section "$(target_label "$target_id") [$type]" "$desc" \
             < <(list_target_orphan_datasets "$target_id")
     done
 
@@ -5303,9 +5306,9 @@ latest_common_snapshot_name() {
     [ -n "$latest" ] && echo "$latest"
 }
 
-local_receive_options() {
-    echo "-F -s -u"
-}
+# Statische Optionen für lokales `zfs receive`. Als Array, damit die Flags
+# ohne Wort-Splitting sauber als separate Argumente übergeben werden.
+LOCAL_RECEIVE_OPTS=(-F -s -u)
 
 local_receive_resume_token() {
     local dataset="$1"
@@ -5341,7 +5344,7 @@ resume_local_replication() {
     fi
 
     if send_resume_stream "Lokal Resume ${ds} -> ${target}" "$token" \
-        | zfs receive $(local_receive_options) "$target" 2> >(log_stderr "ZFS Receive lokal"); then
+        | zfs receive "${LOCAL_RECEIVE_OPTS[@]}" "$target" 2> >(log_stderr "ZFS Receive lokal"); then
         ((REPLICATION_RESUMED++))
         return 0
     fi
@@ -5381,7 +5384,7 @@ local_full_send() {
     fi
 
     send_stream "Lokal Full ${ds}@${latest} -> ${target}" "${ds}@${latest}" \
-        | zfs receive $(local_receive_options) "$target" 2> >(log_stderr "ZFS Receive lokal")
+        | zfs receive "${LOCAL_RECEIVE_OPTS[@]}" "$target" 2> >(log_stderr "ZFS Receive lokal")
 }
 
 local_incremental_send() {
@@ -5394,7 +5397,7 @@ local_incremental_send() {
 
     send_stream "Lokal Incremental ${ds}@${from} -> ${ds}@${to}" \
         -i "${ds}@${from}" "${ds}@${to}" \
-        | zfs receive $(local_receive_options) "$target" 2> >(log_stderr "ZFS Receive lokal")
+        | zfs receive "${LOCAL_RECEIVE_OPTS[@]}" "$target" 2> >(log_stderr "ZFS Receive lokal")
 }
 
 local_full_send_all_snapshots() {
@@ -5653,7 +5656,7 @@ replicate_dataset_local() {
 
     if send_stream "Lokal Incremental ${ds}@${common} -> ${ds}@${latest}" \
         -I "${ds}@${common}" "${ds}@${latest}" \
-        | zfs receive $(local_receive_options) "$target" 2> >(log_stderr "ZFS Receive lokal"); then
+        | zfs receive "${LOCAL_RECEIVE_OPTS[@]}" "$target" 2> >(log_stderr "ZFS Receive lokal"); then
         ((REPLICATION_INCREMENTAL++))
         return
     fi
@@ -5772,6 +5775,34 @@ list_target_orphan_datasets() {
                 dataset_has_active_descendant "$source_ds" && continue
                 printf '%s\n' "$target"
             done < <(remote_list_datasets_recursive "$base" | sort -r)
+            ;;
+        borg)
+            # Borg hat keine Ziel-Datasets, sondern Archive im Namensraum
+            # <ds%>__<snap>. „Verwaist" = ein Quell-Dataset, das nicht mehr aktiv
+            # ist, aber noch verwaltete Archive im Repo hält. Ausgegeben wird der
+            # Quell-Datasetname (Pendant zu den Ziel-Datasets bei local/remote).
+            [ -n "$BORG_REPO" ] || return 0
+            borg_ensure_binary >/dev/null 2>&1 || return 1
+            borg_run info >/dev/null 2>&1 || return 0
+            borg_load_existing_archives
+            local sep="__${SNAPSHOT_PREFIX}" archive mangled seen="|"
+            # Erst die eindeutigen Quell-Datasets aus den Archivnamen sammeln, dann
+            # je Dataset EINMAL den (teuren, get_datasets-basierten) Aktiv-Check –
+            # nicht je Archiv (borg hält je Snapshot ein Archiv).
+            while IFS= read -r archive; do
+                [ -n "$archive" ] || continue
+                # Nur vom Plugin verwaltete Archive (mit unserem Prefix); fremde
+                # Archive im selben Repo werden NIE als verwaist gemeldet.
+                case "$archive" in *"${sep}"*) ;; *) continue ;; esac
+                mangled="${archive%%"${sep}"*}"
+                source_ds="${mangled//%//}"
+                [ -n "$source_ds" ] || continue
+                case "$seen" in *"|${source_ds}|"*) continue ;; esac
+                seen="${seen}${source_ds}|"
+                dataset_is_active_by_name "$source_ds" && continue
+                dataset_has_active_descendant "$source_ds" && continue
+                printf '%s\n' "$source_ds"
+            done < <(printf '%s\n' "$BORG_EXISTING_ARCHIVES" | tr '|' '\n')
             ;;
     esac
 }
@@ -6596,6 +6627,7 @@ maintenance_cleanup_orphans() {
         case "$type" in
             local)  base="$LOCAL_BACKUP_POOL" ;;
             remote) base="$REMOTE_BASE_DATASET" ;;
+            borg)   base="" ;;  # borg: kein Ziel-Dataset-Prefix; target = Quell-Dataset
             *) continue ;;
         esac
 
@@ -6630,6 +6662,29 @@ maintenance_cleanup_orphans() {
                         printf 'GELÖSCHT  %s:%s\n' "$REMOTE_HOST" "$target"
                     else
                         echo "FEHLER: konnte nicht löschen: ${REMOTE_HOST}:${target}" >&2
+                    fi
+                    ;;
+                borg)
+                    # borg: alle verwalteten Archive des inaktiven Quell-Datasets
+                    # (Namensraum <ds%>__…) löschen; fremde Archive bleiben unberührt.
+                    if ! borg_ensure_binary >/dev/null 2>&1 || ! borg_run info >/dev/null 2>&1; then
+                        echo "FEHLER: Borg-Repo nicht erreichbar, übersprungen: $BORG_REPO" >&2; continue
+                    fi
+                    borg_load_existing_archives
+                    local bprefix barch bn=0
+                    bprefix="$(borg_dataset_prefix "$source_ds")"
+                    while IFS= read -r barch; do
+                        [ -n "$barch" ] || continue
+                        case "$barch" in "${bprefix}"*) ;; *) continue ;; esac
+                        if borg_run delete "::${barch}" 2> >(log_stderr "Borg delete ${barch}"); then
+                            bn=$((bn+1)); log "Orphan-Archiv gelöscht: $barch"
+                        else
+                            echo "FEHLER: konnte Archiv nicht löschen: $barch" >&2
+                        fi
+                    done < <(printf '%s\n' "$BORG_EXISTING_ARCHIVES" | tr '|' '\n')
+                    if [ "$bn" -gt 0 ]; then
+                        deleted=$((deleted+1))
+                        printf 'GELÖSCHT  [%s] %s (%s Archiv(e))\n' "$(target_label "$target_id")" "$source_ds" "$bn"
                     fi
                     ;;
             esac

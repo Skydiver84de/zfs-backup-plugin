@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026.07.10.r01 – Hotfix: Plugin überlebt Reboots mit verschlüsseltem/manuell gestartetem Pool
+
+- **Plugin bleibt nach dem Neustart installiert:** Wird das Array erst nach dem
+  Boot manuell gestartet (etwa weil eine LUKS-Passphrase nötig ist) oder generell
+  verzögert, war der ZFS-Pool zum Zeitpunkt der Plugin-Installation noch nicht da.
+  Die Einrichtung brach dann mit einem Fehler ab, woraufhin Unraid das Plugin als
+  fehlgeschlagen entfernte – es war nach jedem Neustart verschwunden und musste neu
+  installiert werden. Die Einrichtung wird jetzt sauber auf den Moment des
+  Array-Starts verschoben (sobald der Pool gemountet ist), sodass das Plugin einen
+  Neustart zuverlässig übersteht.
+
 ## 2026.07.02.r03 – Snapshots prüfen: geprüfte Snapshot-Anzahl anzeigen
 
 - **Snapshot-Anzahl im Prüfergebnis:** „Snapshots prüfen" (Wartung) vergleicht

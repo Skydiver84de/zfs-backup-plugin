@@ -1,0 +1,13 @@
+#!/bin/bash
+# zfs-backup – Unraid-Event-Hook „disks_mounted".
+#
+# Läuft, sobald Unraid das Array und die Pools gemountet hat – erst JETZT ist
+# cache/system verfügbar. Beim Boot (verschlüsseltes/manuell gestartetes Array)
+# ist der Pool zum Plugin-Installationszeitpunkt noch nicht da; install.sh
+# überspringt dann die ZFS-abhängige Einrichtung und beendet sich sauber, damit
+# Unraid die .plg nicht als fehlgeschlagen entfernt. Dieser Hook holt die
+# Einrichtung nach. install.sh ist idempotent, läuft also gefahrlos bei jedem
+# Array-Start.
+PLUGIN_DIR="/usr/local/emhttp/plugins/zfs-backup"
+[ -x "$PLUGIN_DIR/install.sh" ] || exit 0
+bash "$PLUGIN_DIR/install.sh"

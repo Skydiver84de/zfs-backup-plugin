@@ -18,11 +18,22 @@ fail() { echo "FEHLER: $*" >&2; exit 1; }
 
 echo "== zfs-backup Plugin-Setup =="
 
-# 1. ZFS vorhanden?
-command -v zfs >/dev/null 2>&1 || fail "ZFS (zfs-Befehl) nicht gefunden."
+# 1. ZFS + Pool verfügbar? Beim Boot ist der Pool oft NOCH NICHT importiert
+#    (verschlüsseltes Array / manueller Start nach LUKS-Passphrase, oder Array
+#    startet generell erst nach dem Plugin-Install). Dann darf das Setup NICHT
+#    scheitern – sonst entfernt Unraid die .plg als „fehlgeschlagen" und das
+#    Plugin ist nach jedem Reboot weg. Die ZFS-abhängige Einrichtung holt der
+#    Array-Start-Hook (event/disks_mounted ruft install.sh erneut) nach, sobald
+#    der Pool gemountet ist. Idempotent, daher gefahrlos mehrfach.
+POOL="${SYSTEM_DS%%/*}"
+if ! command -v zfs >/dev/null 2>&1 || ! zpool list -H -o name "$POOL" >/dev/null 2>&1; then
+    echo "Hinweis: ZFS-Pool '$POOL' noch nicht verfügbar (Array nicht gestartet)."
+    echo "Die ZFS-abhängige Einrichtung wird beim Array-Start nachgeholt."
+    exit 0
+fi
 
-# 2. cache/system MUSS ein Dataset sein (siehe README). Sonst lägen Logs/State
-#    – und Docker/libvirt – im selben Dataset wie sicherungswürdige Daten.
+# 2. cache/system MUSS ein Dataset sein (siehe README). Der Pool ist jetzt da –
+#    ein fehlendes Dataset ist also ein echter Konfigurationsfehler.
 if ! zfs list -H -o name "$SYSTEM_DS" >/dev/null 2>&1; then
     echo
     echo "ABBRUCH: '$SYSTEM_DS' ist kein ZFS-Dataset."

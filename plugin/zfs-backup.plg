@@ -3,8 +3,8 @@
 <!DOCTYPE PLUGIN [
 <!ENTITY name      "zfs-backup">
 <!ENTITY author    "Skydiver84de">
-<!ENTITY version   "2026.07.02.r03">
-<!ENTITY md5       "8a554be349d1d309894cd75727a4eac9">
+<!ENTITY version   "2026.07.10.r01">
+<!ENTITY md5       "6f755292c92fa762bea09a761158064a">
 <!ENTITY plugdir   "/boot/config/plugins/&name;">
 <!ENTITY emhttp    "/usr/local/emhttp/plugins/&name;">
 <!ENTITY giturl    "https://raw.githubusercontent.com/Skydiver84de/zfs-backup-plugin/main">
@@ -30,6 +30,17 @@
 
 <CHANGES>
 <![CDATA[
+
+## 2026.07.10.r01 – Hotfix: Plugin überlebt Reboots mit verschlüsseltem/manuell gestartetem Pool
+
+- **Plugin bleibt nach dem Neustart installiert:** Wird das Array erst nach dem
+  Boot manuell gestartet (etwa weil eine LUKS-Passphrase nötig ist) oder generell
+  verzögert, war der ZFS-Pool zum Zeitpunkt der Plugin-Installation noch nicht da.
+  Die Einrichtung brach dann mit einem Fehler ab, woraufhin Unraid das Plugin als
+  fehlgeschlagen entfernte – es war nach jedem Neustart verschwunden und musste neu
+  installiert werden. Die Einrichtung wird jetzt sauber auf den Moment des
+  Array-Starts verschoben (sobald der Pool gemountet ist), sodass das Plugin einen
+  Neustart zuverlässig übersteht.
 
 ## 2026.07.02.r03 – Snapshots prüfen: geprüfte Snapshot-Anzahl anzeigen
 

@@ -85,12 +85,15 @@ Snapshot-Bestand der Quelle.
 
 ## Arbeitsweise
 
-* **Git-Stand zuerst abgleichen:** Das Repo wird von mehreren Rechnern aus
-  bearbeitet. Zu Beginn jeder Anfrage (vor dem Arbeiten) prüfen, ob der lokale
-  Stand dem Remote entspricht — `git fetch` und lokal/`origin/main` vergleichen
-  (z. B. `git status -sb` bzw. `git rev-list --left-right --count HEAD...origin/main`).
-  Bei Abweichung erst darauf hinweisen und angleichen (i. d. R. `git pull --rebase`),
-  bevor Änderungen entstehen — sonst drohen Divergenz und Force-Push-Konflikte.
+* **Git-Stand vor der ersten Änderung abgleichen:** Das Repo wird von mehreren
+  Rechnern aus bearbeitet. **Einmal je Sitzung**, unmittelbar bevor die erste
+  Datei-Änderung oder der erste Commit entsteht, prüfen, ob der lokale Stand dem
+  Remote entspricht — `git fetch` und lokal/`origin/main` vergleichen (z. B.
+  `git rev-list --left-right --count HEAD...origin/main`). Bei Abweichung erst
+  darauf hinweisen und angleichen (i. d. R. `git pull --rebase`), bevor Änderungen
+  entstehen — sonst drohen Divergenz und Force-Push-Konflikte. **Nicht** auslösen
+  bei reinen Lese-, Erklär- oder Diskussionsanfragen oder eingefügtem Text; und
+  innerhalb derselben Sitzung nicht wiederholen (der Stand ist dann schon bekannt).
 * **Release nur auf explizite Erlaubnis:** Einen neuen Release (Build/Tag/GitHub-
   Release, siehe RELEASING.md) NIE eigenmächtig starten. Erst wenn der Nutzer es
   ausdrücklich für genau diesen Release freigibt. Vorbereiten (CHANGELOG-Entwurf,

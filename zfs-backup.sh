@@ -7763,7 +7763,7 @@ borg_repo_df_bytes() {
 
 borg_update_cache_file() { printf '%s/borg_update_check' "$STATE_DIR"; }
 
-# Installierte borg-Version (z. B. „1.4.4"). Leer, wenn nicht ermittelbar.
+# Installierte borg-Version (z. B. „1.4.5"). Leer, wenn nicht ermittelbar.
 borg_installed_version() {
     local bin
     bin=$(borg_bin) || return 1

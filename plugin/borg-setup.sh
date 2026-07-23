@@ -15,11 +15,19 @@
 
 set -o pipefail
 
-# Borg 1.4.4, x86_64, glibc >= 2.31 (deckt Unraid 6.12+ ab). Nur diese eine
-# Architektur – Unraid läuft auf x86_64.
-BORG_VERSION="1.4.4"
-BORG_ASSET="borg-linux-glibc231-x86_64"
-BORG_SHA256="28d8053626bd375837ed4fdb4dda5ef29b2271dbe71a2c6a5749d8f8f0021c6d"
+# Borg 1.4.5, x86_64, glibc >= 2.35 (Unraid 6.12+ hat glibc 2.37+, passt). Nur diese
+# eine Architektur – Unraid läuft auf x86_64.
+#
+# HINWEIS zur Asset-Wahl: Ab 1.4.5 veröffentlicht borg KEINE lokal gebaute
+# glibc231-Binary mehr; für Linux gibt es nur noch die auf GitHub-Actions gebaute
+# „-gh"-Binary mit glibc 2.35 (vorher 2.31 – die Untergrenze steigt also). Für diese
+# „-gh"-Binaries liefert borg KEINE GPG-Signatur, sondern eine Provenance-
+# Attestation. Wir verlassen uns auf den SHA256-Pin unten; die Attestation lässt sich
+# zusätzlich prüfen (beim Anheben der Version zu tun):
+#   gh attestation verify --repo borgbackup/borg --source-ref refs/tags/<version> <asset>
+BORG_VERSION="1.4.5"
+BORG_ASSET="borg-linux-glibc235-x86_64-gh"
+BORG_SHA256="1410e28609be3080d0e3ab27a78f5c586a29fd0c75c2aa6415fcde1293bcd923"
 BORG_URL="https://github.com/borgbackup/borg/releases/download/${BORG_VERSION}/${BORG_ASSET}"
 
 RUNTIME_DIR="${1:-${ZFS_BACKUP_RUNTIME_DIR:-}}"

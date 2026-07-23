@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026.07.23.r01 – Borg-Binary auf 1.4.5 aktualisiert
+
+- **Borg 1.4.5:** Die mitgelieferte Borg-Binary wurde von 1.4.4 auf das
+  Bugfix-Release 1.4.5 angehoben. Bestehende Repositories und Archive bleiben
+  unverändert kompatibel. Beim nächsten Plugin-Update lädt die Box die neue Binary
+  automatisch und verifiziert sie gegen die im Plugin hinterlegte Prüfsumme. Die
+  Echtheit der Binary ist zusätzlich über die Provenance-Attestation von GitHub
+  belegt. Voraussetzung ist nun glibc 2.35 oder neuer, was von der ohnehin
+  vorausgesetzten Unraid-Version 6.12 aufwärts erfüllt wird.
+
 ## 2026.07.10.r01 – Hotfix: Plugin überlebt Reboots mit verschlüsseltem/manuell gestartetem Pool
 
 - **Plugin bleibt nach dem Neustart installiert:** Wird das Array erst nach dem

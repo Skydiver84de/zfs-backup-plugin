@@ -1656,28 +1656,74 @@ config_maintain() {
 # Locking
 ########################################
 
+# Läuft unter dieser PID WIRKLICH ein zfs-backup-Lauf?
+#
+# Eine reine PID-Prüfung (`ps -p`/`kill -0`) genügt hier nicht: Die Lock-Datei
+# liegt im RUNTIME_DIR (Pool) und überlebt damit einen harten Abbruch, bei dem
+# das Skript nicht mehr aufräumen kann — SIGKILL durch den OOM-Killer, Strom-
+# ausfall, Kernel-Panic (der EXIT-Trap greift dort nicht). Sie übersteht auch
+# den Reboot, denn beim Boot räumt nichts auf.
+#
+# Linux verwendet PIDs wieder; auf einem NAS ist pid_max in wenigen Tagen einmal
+# durchlaufen. Die verwaiste Nummer gehört dann irgendwann einem fremden Prozess
+# — ohne Identitätsprüfung meldete das Skript ab da für immer „Backup läuft
+# bereits" und es liefe NIE wieder ein Backup (nur der Veraltet-Wächter würde
+# es irgendwann melden). Deshalb zusätzlich die Kommandozeile prüfen: der
+# Wrapper /usr/local/sbin/zfs-backup startet das Skript per exec, die cmdline
+# eines echten Laufs enthält also immer „zfs-backup.sh".
+lock_pid_alive() {
+    local pid="$1" cmdline
+
+    case "$pid" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+
+    [ -r "/proc/${pid}/cmdline" ] || return 1
+    cmdline=$(tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null) || return 1
+
+    case "$cmdline" in
+        *zfs-backup.sh*) return 0 ;;
+    esac
+
+    return 1
+}
+
+# Lock erwerben. Das Anlegen läuft ATOMAR über noclobber ("set -C"): existiert
+# die Datei schon, schlägt die Umleitung fehl. Ein Test-dann-Schreiben wäre eine
+# Race — Cron-Lauf und GUI-Start („Lauf starten") können sich exakt treffen, und
+# dann liefen zwei Läufe gleichzeitig auf denselben Datasets (zfs destroy/send
+# parallel). Erst wenn das Anlegen fehlschlägt, wird geprüft, ob der Lock zu
+# einem echten Lauf gehört oder verwaist ist.
 acquire_lock() {
 
-    if [ -f "$LOCK_FILE" ]; then
+    local old_pid
 
-        OLD_PID=$(cat "$LOCK_FILE")
-
-        if ps -p "$OLD_PID" >/dev/null 2>&1; then
-
-            echo
-            echo "Backup läuft bereits."
-            echo "PID: $OLD_PID"
-            echo
-
-            exit 1
-
-        else
-
-            rm -f "$LOCK_FILE"
-        fi
+    if ( set -o noclobber; echo $$ > "$LOCK_FILE" ) 2>/dev/null; then
+        return 0
     fi
 
-    echo $$ > "$LOCK_FILE"
+    old_pid=$(cat "$LOCK_FILE" 2>/dev/null)
+
+    if lock_pid_alive "$old_pid"; then
+
+        echo
+        echo "Backup läuft bereits."
+        echo "PID: $old_pid"
+        echo
+
+        exit 1
+    fi
+
+    # Verwaister Lock: PID gehört keinem Lauf (mehr). Nicht still übergehen.
+    log "Verwaisten Lock entfernt (PID ${old_pid:-unbekannt} gehört zu keinem Lauf)"
+    rm -f "$LOCK_FILE"
+
+    if ( set -o noclobber; echo $$ > "$LOCK_FILE" ) 2>/dev/null; then
+        return 0
+    fi
+
+    echo "FEHLER: Lock konnte nicht erworben werden: $LOCK_FILE" >&2
+    exit 1
 }
 
 release_lock() {
@@ -1715,7 +1761,7 @@ cli_stop_run() {
     case "$pid" in
         ''|*[!0-9]*) console_warn "Keine gültige Lauf-PID gefunden."; return 1 ;;
     esac
-    if ! kill -0 "$pid" 2>/dev/null; then
+    if ! lock_pid_alive "$pid"; then
         console_info "Lauf nicht (mehr) aktiv – Lock wird bereinigt."
         release_lock
         return 0
@@ -2466,9 +2512,11 @@ status_json() {
     [ -f "${STATE_DIR}/last_run_stats" ] && has_run=true
 
     # Live-Status über das Lock-File (analog acquire_lock, aber ohne Seiteneffekt).
+    # Identitätsprüfung wie dort – sonst zeigte die GUI nach einem verwaisten Lock
+    # mit wiederverwendeter PID dauerhaft „läuft".
     if [ -f "$LOCK_FILE" ]; then
         running_pid=$(cat "$LOCK_FILE" 2>/dev/null)
-        if [ -n "$running_pid" ] && ps -p "$running_pid" >/dev/null 2>&1; then
+        if lock_pid_alive "$running_pid"; then
             running=true
         else
             running_pid=""
@@ -8942,7 +8990,7 @@ handle_cli() {
                             PID)     pid=$v ;;
                         esac
                     done < "$pf"
-                    [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null && break
+                    [ -n "$pid" ] && ! lock_pid_alive "$pid" && break
                     key="${phase}"$'\t'"${detail}"
                     if [ "$key" != "$last" ]; then
                         printf '%s\t%s\t%s\t%s\t%s\t%s\n' \

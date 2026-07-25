@@ -53,16 +53,33 @@ Annahme: Version `JJJJ.MM.TT.rNN` (z. B. `2026.06.21.r01`).
    ```
    Ergebnis: `plugin/packages/zfs-backup-<datum>.r01.txz` + `plugin/zfs-backup.plg`.
 
-3. **`.txz` + `.plg` committen** (von Unraid mit git-Push-Zugang, sonst die beiden
-   Dateien auf den Rechner mit `gh`-Login kopieren und dort committen). Das alte
-   Paket aus `plugin/packages/` entfernen (build.sh räumt es beim Bauen selbst auf):
+3. **`.txz` + `.plg` auf den Mac holen und dort committen.** Gebaut wird auf
+   Unraid (makepkg), **committet und gepusht wird ausschließlich vom Mac**. Das
+   alte Paket aus `plugin/packages/` entfernen (build.sh räumt es beim Bauen
+   selbst auf):
    ```bash
+   scp root@<unraid>:<clone>/plugin/packages/zfs-backup-<version>.txz plugin/packages/
+   scp root@<unraid>:<clone>/plugin/zfs-backup.plg plugin/zfs-backup.plg
+   git rm plugin/packages/<altes-paket>.txz
    git add -A plugin/packages plugin/zfs-backup.plg
    git commit -m "release: <version>"
    git push origin main
    ```
 
-4. **Tag + GitHub-Release** (optional, als Marker; Installation läuft über raw-URL):
+4. **Unraid-Clone aufräumen — NICHT vergessen.** Der Release-Build hat
+   `zfs-backup.plg` und `plugin/packages/` **im Unraid-Clone** verändert. Weil
+   committet wurde (Schritt 3) nur auf dem Mac, bleiben diese Änderungen dort als
+   uncommittete Arbeit liegen. Der nächste `git pull` auf Unraid bricht dann ab
+   („Your local changes would be overwritten by merge") — und ein anschließender
+   `build.sh --install` baut unbemerkt den **alten** Stand. Deshalb nach jedem
+   Release auf Unraid:
+   ```bash
+   cd <clone> && git checkout -- plugin/ && git clean -f plugin/packages/ && git pull --ff-only
+   ```
+   Verworfen werden dabei nur die Build-Artefakte, die identisch bereits im Repo
+   liegen; `git pull` holt sie regulär zurück.
+
+5. **Tag + GitHub-Release** (optional, als Marker; Installation läuft über raw-URL):
    ```bash
    git tag -a <version> -m "<version>" && git push origin <version>
    awk '/^## <version>/{f=1; next} /^## /&&f{exit} f' CHANGELOG.md \

@@ -3647,10 +3647,13 @@ show_snapshots() {
     local total_all=0
     local local_active
     local remote_active
+    local borg_active
     local lh ld lw lm ly ltot
+    local bh bd bw bm by btot
 
     local_active=$(target_enabled_count local)
     remote_active=$(target_enabled_count remote)
+    borg_active=$(target_enabled_count borg)
 
     console_phase "Snapshots"
 
@@ -3702,6 +3705,14 @@ show_snapshots() {
     else
         printf "%-42s %7s\n" "Remote" "kein aktives Ziel"
     fi
+
+    if [ "$borg_active" -gt 0 ]; then
+        read -r bh bd bw bm by btot < <(borg_snapshot_inventory)
+        printf "%-42s %7s %7s %7s %7s %7s %7s   (Stand letzter Lauf, kein SSH)\n" \
+            "Borg" "$bh" "$bd" "$bw" "$bm" "$by" "$btot"
+    else
+        printf "%-42s %7s\n" "Borg" "kein aktives Ziel"
+    fi
     echo
 
     console_success "Snapshots abgeschlossen: Quelle ${count} Dataset(s), ${total_all} verwaltete Snapshot(s)"
@@ -3717,14 +3728,16 @@ snapshots_json() {
     local force_remote="${1:-no}"
     local ds h d w m y total first=1 used
     local total_h=0 total_d=0 total_w=0 total_m=0 total_y=0 total_all=0 total_used=0
-    local local_active remote_active
+    local local_active remote_active borg_active
     local lh ld lw lm ly ltot
     local rh rd rw rm ry rtot
+    local bh bd bw bm by btot
     local -A ds_used=()
     local _ds _u
 
     local_active=$(target_enabled_count local)
     remote_active=$(target_enabled_count remote)
+    borg_active=$(target_enabled_count borg)
 
     # Belegte Größe je aktivem Dataset (ein Bulk-`zfs list`, kein Aufruf je Dataset).
     while IFS=$'\t' read -r _ds _u; do
@@ -3749,8 +3762,9 @@ snapshots_json() {
         "$(json_num "$total_h")" "$(json_num "$total_d")" "$(json_num "$total_w")" \
         "$(json_num "$total_m")" "$(json_num "$total_y")" "$(json_num "$total_all")" "$(json_num "$total_used")"
 
-    printf ',"targets":{"local_active":%s,"remote_active":%s,' \
-        "$(json_num "$local_active")" "$(json_num "$remote_active")"
+    printf ',"targets":{"local_active":%s,"remote_active":%s,"borg_active":%s,' \
+        "$(json_num "$local_active")" "$(json_num "$remote_active")" \
+        "$(json_num "$borg_active")"
 
     if [ "$local_active" -gt 0 ]; then
         read -r lh ld lw lm ly ltot < <(target_snapshot_inventory_for_type local)
@@ -3780,6 +3794,17 @@ snapshots_json() {
             "$(json_num "$rm")" "$(json_num "$ry")" "$(json_num "$rtot")"
     else
         printf '"remote":null'
+    fi
+
+    # borg: immer aus dem Scope-Cache (kein Live-Zweig, siehe
+    # borg_snapshot_inventory) – auch bei „Live aktualisieren".
+    if [ "$borg_active" -gt 0 ]; then
+        read -r bh bd bw bm by btot < <(borg_snapshot_inventory)
+        printf ',"borg":{"hourly":%s,"daily":%s,"weekly":%s,"monthly":%s,"yearly":%s,"total":%s}' \
+            "$(json_num "$bh")" "$(json_num "$bd")" "$(json_num "$bw")" \
+            "$(json_num "$bm")" "$(json_num "$by")" "$(json_num "$btot")"
+    else
+        printf ',"borg":null'
     fi
     printf '}}\n'
 }
@@ -5387,6 +5412,32 @@ target_snapshot_inventory_for_type() {
         total_m=$((total_m+${m:-0}))
         total_y=$((total_y+${y:-0}))
         total_all=$((total_all+${total:-0}))
+    done
+
+    printf "%s %s %s %s %s %s\n" "$total_h" "$total_d" "$total_w" "$total_m" "$total_y" "$total_all"
+}
+
+# Verwaltete Snapshots (Archive) aller aktiven borg-Ziele, summiert; Ausgabe wie
+# target_snapshot_inventory_for_type: "h d w m y gesamt".
+#
+# Bewusst KEIN Zweig in target_snapshot_inventory_for_type: die zählt live per
+# `zfs list`/SSH. Für borg hieße das ein `borg list` je Dataset gegen ein Offsite-
+# Repo — langsam und für eine reine Anzeige nicht vertretbar. Quelle ist deshalb
+# derselbe Scope-Cache je Ziel, aus dem auch die Scope-Übersicht
+# (--snapshot-tree) zählt; er wird am Lauf-Ende geschrieben.
+borg_snapshot_inventory() {
+    local tid ds dh dd dw dm dy dt _used _refer _latest
+    local total_h=0 total_d=0 total_w=0 total_m=0 total_y=0 total_all=0
+
+    for tid in "${TARGETS[@]}"; do
+        target_enabled "$tid" || continue
+        [ "$(target_type "$tid")" = "borg" ] || continue
+
+        while IFS=$'\t' read -r ds dh dd dw dm dy dt _used _refer _latest; do
+            [ -n "$ds" ] || continue
+            total_h=$((total_h+dh)); total_d=$((total_d+dd)); total_w=$((total_w+dw))
+            total_m=$((total_m+dm)); total_y=$((total_y+dy)); total_all=$((total_all+dt))
+        done < <(snapshot_cache_summary "$(snapshots_list_cache_file "$tid")")
     done
 
     printf "%s %s %s %s %s %s\n" "$total_h" "$total_d" "$total_w" "$total_m" "$total_y" "$total_all"

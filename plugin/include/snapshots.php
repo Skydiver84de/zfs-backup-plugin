@@ -82,12 +82,13 @@ $scopes   = $tree['scopes'] ?? [];
       <tr><td class="k"><strong>Gesamt</strong></td><td class="v"><strong><?= (int)($tot['total'] ?? 0) ?></strong></td></tr>
     </table>
   </div>
-  <?php if (!empty($tg['local']) || !empty($tg['remote'])): ?>
+  <?php if (!empty($tg['local']) || !empty($tg['remote']) || !empty($tg['borg'])): ?>
   <div class="zb-card">
     <h3>Snapshots Ziele</h3>
     <table>
       <tr><td class="k">Lokal</td><td class="v"><?= !empty($tg['local']) ? (int)$tg['local']['total'] : '–' ?></td></tr>
       <tr><td class="k">Remote</td><td class="v"><?= !empty($tg['remote']) ? (int)$tg['remote']['total'] : '–' ?></td></tr>
+      <tr><td class="k">Borg</td><td class="v"><?= !empty($tg['borg']) ? (int)$tg['borg']['total'] : '–' ?></td></tr>
     </table>
   </div>
   <?php endif; ?>

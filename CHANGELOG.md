@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026.07.25.r01 – Hotfix: Backups konnten nach hartem Abbruch dauerhaft aussetzen
+
+- **Blockade nach Absturz behoben:** Wurde ein Lauf hart beendet – Stromausfall,
+  Kernel-Absturz oder Abschuss wegen Speichermangels –, blieb die Laufmarkierung
+  zurück und überstand auch den Neustart. Da das System Prozessnummern
+  wiederverwendet, konnte die gemerkte Nummer später einem beliebigen anderen
+  Programm gehören; das Plugin meldete dann bei jedem weiteren Versuch fälschlich,
+  es laufe bereits ein Backup, und es lief nie wieder eines an. Die Markierung wird
+  jetzt darauf geprüft, ob dahinter wirklich ein Backup-Lauf steckt, und andernfalls
+  protokolliert und entfernt. Auch die Statusanzeige und der Abbrechen-Knopf zeigten
+  in diesem Fall dauerhaft einen Lauf an, der längst nicht mehr existierte.
+- **Doppelte Läufe verhindert:** Starteten Zeitplan und der Knopf in der Oberfläche
+  im selben Moment, konnten beide Läufe gleichzeitig anlaufen und sich auf denselben
+  Datensätzen in die Quere kommen. Die Laufmarkierung wird nun unteilbar gesetzt, so
+  dass zuverlässig nur ein Lauf gleichzeitig startet.
+
 ## 2026.07.23.r01 – Borg-Binary auf 1.4.5 aktualisiert
 
 - **Borg 1.4.5:** Die mitgelieferte Borg-Binary wurde von 1.4.4 auf das

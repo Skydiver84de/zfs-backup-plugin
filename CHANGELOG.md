@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026.07.25.r02 – Hotfix: Borg-Ziele fehlten in den Zielsummen
+
+- **Borg in der Snapshot-Übersicht ergänzt:** Auf der Snapshots-Seite führte die
+  Karte Snapshots Ziele nur Lokal und Remote auf, ein Borg-Ziel fehlte dort
+  vollständig – ebenso in der Zusammenfassung Aktive Ziele der Kommandozeile.
+  Beides zeigt jetzt auch den Bestand der Borg-Ziele. Die Zahl stammt aus dem
+  Stand des letzten Laufs, damit die Anzeige keine Verbindung zum entfernten
+  Speicher aufbauen muss; nach dem nächsten Lauf oder einem Klick auf
+  Aktualisieren ist sie aktuell. Die Auflistung je Quelle und Ziel darunter war
+  nicht betroffen.
+
 ## 2026.07.25.r01 – Hotfix: Backups konnten nach hartem Abbruch dauerhaft aussetzen
 
 - **Blockade nach Absturz behoben:** Wurde ein Lauf hart beendet – Stromausfall,

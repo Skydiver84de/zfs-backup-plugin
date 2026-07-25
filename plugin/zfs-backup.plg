@@ -3,8 +3,8 @@
 <!DOCTYPE PLUGIN [
 <!ENTITY name      "zfs-backup">
 <!ENTITY author    "Skydiver84de">
-<!ENTITY version   "2026.07.25.r01">
-<!ENTITY md5       "9be22e0b39c0f0684547a7de77938f21">
+<!ENTITY version   "2026.07.25.r02">
+<!ENTITY md5       "c9cb8b7a71de5c8cab702d16ba068118">
 <!ENTITY plugdir   "/boot/config/plugins/&name;">
 <!ENTITY emhttp    "/usr/local/emhttp/plugins/&name;">
 <!ENTITY giturl    "https://raw.githubusercontent.com/Skydiver84de/zfs-backup-plugin/main">
@@ -30,6 +30,17 @@
 
 <CHANGES>
 <![CDATA[
+
+## 2026.07.25.r02 – Hotfix: Borg-Ziele fehlten in den Zielsummen
+
+- **Borg in der Snapshot-Übersicht ergänzt:** Auf der Snapshots-Seite führte die
+  Karte Snapshots Ziele nur Lokal und Remote auf, ein Borg-Ziel fehlte dort
+  vollständig – ebenso in der Zusammenfassung Aktive Ziele der Kommandozeile.
+  Beides zeigt jetzt auch den Bestand der Borg-Ziele. Die Zahl stammt aus dem
+  Stand des letzten Laufs, damit die Anzeige keine Verbindung zum entfernten
+  Speicher aufbauen muss; nach dem nächsten Lauf oder einem Klick auf
+  Aktualisieren ist sie aktuell. Die Auflistung je Quelle und Ziel darunter war
+  nicht betroffen.
 
 ## 2026.07.25.r01 – Hotfix: Backups konnten nach hartem Abbruch dauerhaft aussetzen
 

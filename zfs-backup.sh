@@ -4602,6 +4602,27 @@ filter_managed_snapshot_lines() {
     done
 }
 
+# Ersetzt eine Cache-Datei NUR, wenn das Erzeugen erfolgreich war ($3 = Status
+# des schreibenden Befehls, Ausgabe steht in der Temp-Datei $2). Hintergrund: ein
+# `> datei` leert die Zieldatei, BEVOR der Befehl läuft – scheitert die Abfrage
+# (borg-Lock-Timeout, SSH-Abbruch, Pool weg), bliebe eine leere Datei zurück und
+# das Ziel verschwände komplett aus der Snapshot-Anzeige, obwohl seine Sicherungen
+# unverändert existieren. Im Fehlerfall bleibt daher der letzte bekannte Stand.
+# Eine leere, aber ERFOLGREICHE Abfrage wird übernommen (Bestand kann echt 0 sein).
+replace_cache_if_ok() {
+    local target="$1" tmp="$2" rc="$3"
+
+    if [ "${rc:-1}" -eq 0 ]; then
+        mv -f "$tmp" "$target" 2>/dev/null && return 0
+        rm -f "$tmp" 2>/dev/null
+        log "FEHLER: Cache konnte nicht ersetzt werden: $target"
+        return 1
+    fi
+    rm -f "$tmp" 2>/dev/null
+    log "Cache nicht aktualisiert (Abfrage fehlgeschlagen), letzter Stand bleibt: ${target##*/}"
+    return 1
+}
+
 # Liste ALLER verwalteten Snapshots (name used refer creation, TAB-getrennt) der
 # aktiven Datasets je Scope (Quelle + jedes aktive Ziel) in den State schreiben –
 # je ein `zfs list -t snapshot` bzw. EIN SSH-Aufruf am warmen Lauf-Ende. Quelle
@@ -4611,12 +4632,15 @@ filter_managed_snapshot_lines() {
 # Datenmenge (Restore-Größe, immer aussagekräftig). Beide erfassen.
 write_snapshots_list_cache() {
     local force_remote="${1:-no}"
-    local tid type
+    local tid type _tmp _rc _cachefile
 
     # Quelle: ein zfs list über alle Pools.
     [ "$force_remote" = "yes" ] && console_status "Quelle wird live abgefragt …"
+    _tmp="${STATE_DIR}/snapshots_list_cache.tmp.$$"
     zfs list -H -p -o name,used,referenced,creation -t snapshot 2>/dev/null \
-        | filter_managed_snapshot_lines cat > "${STATE_DIR}/snapshots_list_cache"
+        | filter_managed_snapshot_lines cat > "$_tmp"
+    _rc=$?
+    replace_cache_if_ok "${STATE_DIR}/snapshots_list_cache" "$_tmp" "$_rc"
 
     # Je aktivem Ziel ein eigener Cache. Lokal: zfs list -r BASE. Remote: nur
     # wenn der Host ohnehin wach ist (REMOTE_READY) – sonst bleibt der alte Cache
@@ -4635,10 +4659,14 @@ write_snapshots_list_cache() {
         case "$type" in
             local)
                 zfs_name_is_safe "$LOCAL_BACKUP_POOL" || continue
+                _cachefile="$(snapshots_list_cache_file "$tid")"
+                _tmp="${_cachefile}.tmp.$$"
                 zfs list -H -p -o name,used,referenced,creation -t snapshot \
                     -r "$LOCAL_BACKUP_POOL" 2>/dev/null \
                     | filter_managed_snapshot_lines local_target_dataset yes \
-                    > "$(snapshots_list_cache_file "$tid")"
+                    > "$_tmp"
+                _rc=$?
+                replace_cache_if_ok "$_cachefile" "$_tmp" "$_rc"
                 ;;
             remote)
                 zfs_name_is_safe "$REMOTE_BASE_DATASET" || continue
@@ -4651,9 +4679,13 @@ write_snapshots_list_cache() {
                     [ "${REMOTE_READY:-0}" -eq 1 ] || continue
                     [ "$REMOTE_READY_HOST" = "$(remote_host_address)" ] || continue
                 fi
+                _cachefile="$(snapshots_list_cache_file "$tid")"
+                _tmp="${_cachefile}.tmp.$$"
                 remote_ssh "zfs list -H -p -o name,used,referenced,creation -t snapshot -r $(shell_quote "$REMOTE_BASE_DATASET") 2>/dev/null" 2>/dev/null \
                     | filter_managed_snapshot_lines remote_target_dataset yes \
-                    > "$(snapshots_list_cache_file "$tid")"
+                    > "$_tmp"
+                _rc=$?
+                replace_cache_if_ok "$_cachefile" "$_tmp" "$_rc"
                 ;;
             borg)
                 # borg-Archive als „Snapshots" cachen – nur bei Live-Refresh (force)
@@ -4680,9 +4712,24 @@ write_snapshots_list_cache() {
                 # nicht (nur borg info) -> used/refer = 0. Größen aus dem persistenten
                 # Größen-Cache nachschlagen (used=dedup, referenced=original).
                 # FILENAME-Vergleich statt NR==FNR (robust auch bei leerem Größen-Cache).
-                local _szc
+                local _szc _raw
                 _szc=$(borg_size_cache_file "$tid")
                 [ -f "$_szc" ] || { : > "$_szc" 2>/dev/null || _szc=/dev/null; }
+                _cachefile="$(snapshots_list_cache_file "$tid")"
+                _raw="${_cachefile}.raw.$$"
+                # Archivliste ZUERST in eine eigene Datei – NICHT per Prozess-
+                # substitution direkt in awk: deren Exit-Status ist für awk
+                # unsichtbar. Scheitert `borg list` (z. B. Lock-Timeout, während
+                # ein Aufräumen läuft), liefert awk brav eine leere Ausgabe mit
+                # Status 0 – der Cache würde geleert und das Ziel verschwände aus
+                # der Anzeige. So prüfen wir den Status, bevor irgendetwas ersetzt
+                # wird; der letzte bekannte Stand bleibt im Fehlerfall erhalten.
+                if ! borg_run list --format '{archive}{TAB}{time:%s}{NL}' > "$_raw" 2>/dev/null; then
+                    rm -f "$_raw" 2>/dev/null
+                    log "Borg-Archivliste nicht lesbar (Repo gesperrt/nicht erreichbar) – Anzeige behält den letzten Stand: $(target_label "$tid")"
+                    continue
+                fi
+                _tmp="${_cachefile}.tmp.$$"
                 awk -F'\t' -v sep="__${SNAPSHOT_PREFIX}" -v szc="$_szc" '
                         FILENAME==szc { if(NF>=3){ o[$1]=$2; d[$1]=$3 } next }
                         {
@@ -4695,8 +4742,10 @@ write_snapshots_list_cache() {
                             gsub(/%/,"/",dsm)
                             printf "%s@%s\t%d\t%d\t%d\n", dsm, snap, dedup, orig, ts
                         }
-                    ' "$_szc" <(borg_run list --format '{archive}{TAB}{time:%s}{NL}' 2>/dev/null) \
-                    > "$(snapshots_list_cache_file "$tid")"
+                    ' "$_szc" "$_raw" > "$_tmp"
+                _rc=$?
+                rm -f "$_raw" 2>/dev/null
+                replace_cache_if_ok "$_cachefile" "$_tmp" "$_rc"
                 ;;
         esac
     done
@@ -7146,10 +7195,21 @@ borg_run() {
     # globale Variable; hier greift er dann über die Expansion. Für einzelne
     # borg-Aufrufe AUSSERHALB eines Laufs (GUI list/info – kein create, TTL also
     # irrelevant) ist die Variable nicht gesetzt -> sicherer Default unten.
+    # BORG_LOCK_WAIT: borg wartet standardmäßig nur EINE Sekunde auf das
+    # Repo-Lock und bricht dann mit „Failed to create/acquire the lock (timeout)"
+    # ab. Jeder unserer borg-Aufrufe ist eine eigene SSH-Verbindung mit eigenem
+    # `borg serve`; das Lock der gerade beendeten Operation (z. B. `borg list`)
+    # ist beim unmittelbar folgenden `borg delete` oft noch nicht freigegeben ->
+    # der Aufruf scheitert, obwohl nichts kaputt ist. Beobachtet beim Aufräumen
+    # verwaister Datasets: die ersten Löschungen nach jedem `list` schlugen fehl,
+    # spätere liefen durch. Mit einer echten Wartezeit reiht borg sich stattdessen
+    # ein. 60 s deckt die Freigabe-Latenz über SSH großzügig ab, ohne bei einem
+    # WIRKLICH hängenden Lock ewig zu blockieren.
     BORG_REPO="$BORG_REPO" \
     BORG_PASSPHRASE="$BORG_PASSPHRASE_VALUE" \
     BORG_BASE_DIR="$base" \
     BORG_RSH="ssh ${BORG_SSH_OPTIONS}" \
+    BORG_LOCK_WAIT="${BORG_LOCK_WAIT:-60}" \
     BORG_FILES_CACHE_TTL="${BORG_FILES_CACHE_TTL:-10000}" \
     "$bin" "$@"
 }

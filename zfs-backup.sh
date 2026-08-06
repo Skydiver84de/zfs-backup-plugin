@@ -77,6 +77,17 @@ SELF_DATASETS_COMPUTED=0
 VERBOSE=0
 CONSOLE_STATUS_ACTIVE=0
 REMOTE_SSH_ARGS=()
+# Erkennung einer STILLEN Gegenstelle. ConnectTimeout deckt nur den Verbindungs-
+# AUFBAU ab: verstummt eine bereits stehende Verbindung mitten in einer Operation
+# (bei Storage-Anbietern nicht ungewöhnlich), warten ssh und damit borg bzw.
+# zfs send/recv unbegrenzt – Linux' TCP-Keepalive greift erst nach zwei Stunden.
+# Real beobachtet: ein `borg delete` hing über zwei Stunden in poll(), während das
+# Repo über eine frische Verbindung längst wieder erreichbar war. Mit ServerAlive*
+# bricht ssh nach ~60 s ab (4 Proben à 15 s), der Aufruf meldet einen Fehler und
+# der Lauf macht weiter oder meldet sauber, statt zu blockieren.
+# WICHTIG: immer NACH den nutzereigenen SSH-Optionen einsetzen – bei ssh gewinnt
+# der ZUERST gesehene Wert, ein bewusst gesetzter Nutzerwert behält so Vorrang.
+SSH_KEEPALIVE_OPTS=(-o ServerAliveInterval=15 -o ServerAliveCountMax=4)
 LOCAL_REPLICATION_FAILED_DATASETS="|"
 REMOTE_REPLICATION_FAILED_DATASETS="|"
 BORG_REPLICATION_FAILED_DATASETS="|"
@@ -6118,12 +6129,14 @@ ensure_remote_ready() {
     return 1
 }
 
+# SSH_KEEPALIVE_OPTS NACH den Nutzeroptionen: erkennt eine verstummte Gegenstelle
+# nach ~60 s, statt unbegrenzt zu warten (Herleitung bei SSH_KEEPALIVE_OPTS).
 remote_ssh() {
-    ssh -n -o UpdateHostKeys=no "${REMOTE_SSH_ARGS[@]}" "$REMOTE_HOST" "$@"
+    ssh -n -o UpdateHostKeys=no "${REMOTE_SSH_ARGS[@]}" "${SSH_KEEPALIVE_OPTS[@]}" "$REMOTE_HOST" "$@"
 }
 
 remote_ssh_stream() {
-    ssh -o UpdateHostKeys=no "${REMOTE_SSH_ARGS[@]}" "$REMOTE_HOST" "$@"
+    ssh -o UpdateHostKeys=no "${REMOTE_SSH_ARGS[@]}" "${SSH_KEEPALIVE_OPTS[@]}" "$REMOTE_HOST" "$@"
 }
 
 remote_receive_options() {
@@ -7208,7 +7221,7 @@ borg_run() {
     BORG_REPO="$BORG_REPO" \
     BORG_PASSPHRASE="$BORG_PASSPHRASE_VALUE" \
     BORG_BASE_DIR="$base" \
-    BORG_RSH="ssh ${BORG_SSH_OPTIONS}" \
+    BORG_RSH="ssh ${BORG_SSH_OPTIONS} ${SSH_KEEPALIVE_OPTS[*]}" \
     BORG_LOCK_WAIT="${BORG_LOCK_WAIT:-60}" \
     BORG_FILES_CACHE_TTL="${BORG_FILES_CACHE_TTL:-10000}" \
     "$bin" "$@"

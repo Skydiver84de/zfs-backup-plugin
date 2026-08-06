@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026.08.06.r01 – Hotfix: Aufräumen bei Borg, hängende Verbindungen, Anzeige
+
+- **Aufräumen verwaister Datasets bei Borg-Zielen abgeschlossen:** Beim Löschen
+  blieben einzelne Archive stehen, weil Borg nur eine Sekunde auf die Freigabe des
+  Repositorys wartete und dann abbrach. Da jede Löschung über eine eigene
+  Verbindung läuft, war die Freigabe der vorherigen oft noch nicht durch – die
+  ersten Löschungen scheiterten reihenweise. Borg wartet jetzt bis zu einer Minute
+  und reiht sich ein, statt sofort aufzugeben. Das betrifft auch den Zielabgleich
+  im normalen Lauf.
+- **Kein Blockieren mehr bei stillen Verbindungsabbrüchen:** Verstummte eine
+  bereits stehende Verbindung zu einem Remote- oder Borg-Ziel mitten in einer
+  Übertragung, fiel das niemandem auf – der Vorgang wartete unbegrenzt weiter, im
+  beobachteten Fall über zwei Stunden, obwohl das Ziel längst wieder erreichbar
+  war. Solche toten Verbindungen werden jetzt nach etwa einer Minute erkannt,
+  sauber abgebrochen und gemeldet, sodass ein Lauf weiterarbeitet statt
+  festzuhängen.
+- **Anzeige verliert keine Ziele mehr:** Schlug das Abfragen eines Ziels fehl,
+  wurde dessen Snapshot-Übersicht mit einem leeren Ergebnis überschrieben – das
+  Ziel verschwand komplett aus der Anzeige, obwohl seine Sicherungen unverändert
+  vorhanden waren. Der zuletzt bekannte Stand bleibt jetzt erhalten, bis eine
+  Abfrage wieder erfolgreich ist.
+
 ## 2026.07.25.r02 – Hotfix: Borg-Ziele fehlten in den Zielsummen
 
 - **Borg in der Snapshot-Übersicht ergänzt:** Auf der Snapshots-Seite führte die
